@@ -82,6 +82,26 @@ class AssessmentTests(unittest.TestCase):
         self.assertEqual(report["inventory"]["discovered"], 1)
         self.assertTrue(report["coverage"]["complete"])
 
+    def test_cached_inventory_does_not_enumerate_during_assessment(self):
+        client = DemoClient(Config(), threading.Event())
+        cached = {
+            "repositories": [REPO], "complete": False, "discovered": 1,
+            "reason": {"kind": "inventory_deadline", "message": "Checkpoint saved"},
+        }
+        original_get = client.get
+        calls = []
+
+        def tracked_get(path):
+            self.assertFalse(path.startswith("/user/repos?"))
+            calls.append(path)
+            return original_get(path)
+
+        client.get = tracked_get
+        report = assess(client, inventory_report=cached)
+        self.assertIs(report["inventory"], cached)
+        self.assertFalse(report["coverage"]["complete"])
+        self.assertTrue(calls)
+
     def test_resolved_incidents_are_not_probed(self):
         client = FixtureClient({"/user/repos?": []}, {
             "components": [COMPONENT], "incidents": [{**INCIDENT, "status": "resolved", "components": [COMPONENT]}],

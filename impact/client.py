@@ -59,6 +59,9 @@ class Config:
     max_repositories: int = 10000
     max_check_repositories: int = 200
     max_assessments: int = 2000
+    discovery_seconds: int = 15
+    discovery_requests: int = 10
+    discovery_resume_seconds: int = 5
     workers: int = 4
     port: int = 8765
 
@@ -69,6 +72,8 @@ class Config:
             "cycle_seconds": (10, 1800), "max_requests": (1, 10000),
             "max_repositories": (1, 100000), "max_check_repositories": (1, 10000),
             "max_assessments": (1, 20000),
+            "discovery_seconds": (1, 60), "discovery_requests": (1, 100),
+            "discovery_resume_seconds": (1, 300),
             "workers": (1, 16), "port": (1024, 65535),
         }
         values = {}
@@ -243,9 +248,9 @@ def inventory(
     while True:
         try:
             if deadline is not None and time.monotonic() >= deadline:
-                raise ProbeError("inventory_deadline", "Discovery paused at its time budget; resumes from the saved page next cycle")
+                raise ProbeError("inventory_deadline", "Discovery batch time budget reached; progress saved for automatic continuation")
             if request_limit is not None and client.requests >= request_limit:
-                raise ProbeError("inventory_request_limit", "Discovery paused at its request budget; resumes from the saved page next cycle")
+                raise ProbeError("inventory_request_limit", "Discovery batch request budget reached; progress saved for automatic continuation")
             rows = client.get(
                 f"/user/repos?per_page=100&page={state.next_page}&affiliation=owner,collaborator,organization_member&sort=full_name&direction=asc"
             )

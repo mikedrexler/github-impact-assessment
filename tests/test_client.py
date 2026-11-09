@@ -355,6 +355,18 @@ class ClientTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     Config.from_env()
 
+    def test_discovery_config_is_bounded_and_parsed(self):
+        for key in ["DISCOVERY_SECONDS", "DISCOVERY_REQUESTS", "DISCOVERY_RESUME_SECONDS"]:
+            with self.subTest(key=key), patch.dict("os.environ", {f"IMPACT_{key}": "0"}):
+                with self.assertRaises(ValueError):
+                    Config.from_env()
+        with patch.dict("os.environ", {
+            "IMPACT_DISCOVERY_SECONDS": "7", "IMPACT_DISCOVERY_REQUESTS": "3",
+            "IMPACT_DISCOVERY_RESUME_SECONDS": "9",
+        }):
+            config = Config.from_env()
+        self.assertEqual((config.discovery_seconds, config.discovery_requests, config.discovery_resume_seconds), (7, 3, 9))
+
 
 if __name__ == "__main__":
     unittest.main()

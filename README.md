@@ -61,9 +61,9 @@ Installing into `.venv` does not install into a different `python3` on your PATH
 
 ## Monitoring and bounded coverage
 
-The first assessment starts immediately; status is refreshed and repository discovery advances each cycle, including when there are no incidents. Repository probes run **only** for unresolved incidents with matching live component IDs. No incident is fabricated. A degraded component without a mapped incident is explicitly flagged. Unscoped incidents and newly introduced components are surfaced as gaps instead of guessed from titles.
+Startup performs one short discovery batch, then the first assessment. Later assessments read the latest inventory snapshot without waiting for enumeration. Repository discovery has its own paced background schedule, including when there are no incidents. Repository probes run **only** for unresolved incidents with matching live component IDs. No incident is fabricated. A degraded component without a mapped incident is explicitly flagged. Unscoped incidents and newly introduced components are surfaced as gaps instead of guessed from titles.
 
-The dashboard offers manual refresh, incident/component cards, per-repository evidence and error reasons, inventory, filtering, sample limits, timestamps, freshness, and in-memory history. It polls the local server every 5 seconds; that does not cause a GitHub poll. Only one assessment runs at a time; overlapping manual requests deduplicate, with a 10-second manual-refresh throttle. Periodic polling is measured **after the previous assessment completes**. Exceptions retain the previous timestamped snapshot with a visible failure/staleness warning.
+The dashboard offers manual refresh, incident/component cards, per-repository evidence and error reasons, inventory, filtering, sample limits, timestamps, freshness, and in-memory history. It polls the local server every 5 seconds; that does not cause a GitHub poll. Only one worker performs network work: due assessments take priority over discovery batches, so they never overlap or multiply request concurrency. A running discovery batch may delay an assessment until the batch yields. Manual assessment requests deduplicate, with a 10-second throttle. Periodic assessment polling is measured **after the previous assessment completes**. Discovery-only batches do not rerun incident probes, advance check rotation, or add history entries. Exceptions retain the previous timestamped snapshot with a visible failure/staleness warning.
 
 Environment settings (strictly validated integers):
 
@@ -76,22 +76,27 @@ Environment settings (strictly validated integers):
 | `IMPACT_MAX_REPOSITORIES` | 10000 | 1..100000; inventory cap, reported as partial when exceeded |
 | `IMPACT_MAX_CHECK_REPOSITORIES` | 200 | 1..10000; rotating incident-time repository batch |
 | `IMPACT_MAX_ASSESSMENTS` | 2000 | 1..20000; total repository/incident/component rows per cycle |
+| `IMPACT_DISCOVERY_SECONDS` | 15 | 1..60; time budget per discovery-only batch |
+| `IMPACT_DISCOVERY_REQUESTS` | 10 | 1..100; attempts per discovery-only batch, also capped by `IMPACT_MAX_REQUESTS` |
+| `IMPACT_DISCOVERY_RESUME_SECONDS` | 5 | 1..300; pause after a discovery time/request checkpoint before the next batch |
 | `IMPACT_WORKERS` | 4 | 1..16; bounded simultaneous repository probes |
 | `IMPACT_PORT` | 8765 | 1024..65535; loopback dashboard port |
 
 Example: `IMPACT_MAX_CHECK_REPOSITORIES=50 IMPACT_POLL_SECONDS=600 python3 -m impact`.
 
-Enumeration uses pages of 100 until exhausted, denied, timed out, or budget-limited. Its phase receives at most half the cycle time and half the request budget (when the total budget is at least 4) so large inventories do not consume all resources before incident probes begin. An in-flight request/retry can overrun the phase, but not start beyond the total cycle budget. Responses are capped at 8 MiB each. Transient network errors and HTTP 5xx retry at most twice (1s/2s cancellable waits), within the request/time budgets. HTTP 401/404/other 4xx are not retried. Rate-limit responses set a shared cooldown (at least 60 seconds, honoring numeric Retry-After and quota reset); 403 without definitive headers also conservatively sets a cooldown because it could be a secondary limit. Manual refresh cannot bypass it. Status requests remain independent of GitHub API cooldown.
+Enumeration uses pages of 100. By default, each background batch starts at most 10 HTTP attempts and runs for at most 15 seconds before checkpointing; a checkpoint resumes after 5 seconds, not after the 300-second assessment poll. Every discovery batch, including startup, has its own bounded client; its attempts are **additional to assessment-cycle attempts**, not a global hourly allowance. Set the three `IMPACT_DISCOVERY_*` settings deliberately if you need slower discovery. Assessment clients retain `IMPACT_MAX_REQUESTS` and `IMPACT_CYCLE_SECONDS`; the standalone `assess()` fallback without a supplied inventory snapshot retains its half-cycle inventory budget.
+
+An in-flight read can overrun a phase's wall-clock budget, but clients do not start attempts past their deadline. Responses are capped at 8 MiB each. Transient network errors and HTTP 5xx retry at most twice (1s/2s cancellable waits), within each client's request/time budgets. HTTP 401/404/other 4xx are not retried. Discovery and assessment share one GitHub API cooldown: rate-limit responses set at least a 60-second pause, honoring numeric Retry-After and quota reset. A 403 without definitive headers also conservatively sets a cooldown because it could be a secondary limit. Discovery retries service/auth/permission/network/SSO/capacity errors no faster than the normal poll interval, and rate-limit retries wait at least until the shared cooldown expires. Neither manual refresh nor checkpoint continuation bypasses it. Status requests remain independent of GitHub API cooldown.
 
 The deadline prevents new network attempts, not instantaneous interruption of in-flight socket I/O. Shutdown cancels pending starts/backoff and waits briefly for in-flight reads. Offline, permission, API errors and budget exhaustion remain visible as unknown/partial; they never become an all-clear.
 
 ### Workaround for large inventories: resumable discovery
 
-Discovery **continues at the next unfinished page** after time/request limits, transient failures, or rate limits rather than restarting at page one. Each polling cycle adds to a bounded, memory-only inventory. Already discovered repositories remain available to rotating incident checks while later pages are fetched. Manual refresh uses the same cursor and respects the same backoff; it does not discard progress.
+Discovery **continues at the next unfinished page** after time/request limits, transient failures, or rate limits rather than restarting at page one. Each background batch adds to a bounded, memory-only inventory. **`inventory_deadline` is now a resumable checkpoint, not a five-minute stall:** the scheduler queues another discovery-only batch after `IMPACT_DISCOVERY_RESUME_SECONDS`. The coverage panel labels expected time/request checkpoints as **Checkpoint saved**, while genuine errors remain visible. Manual refresh reads the cache instead of restarting enumeration and respects the same backoff.
 
-The coverage panel shows the next page, current-pass count/start time, last unrestricted completion time, and cached entries awaiting revalidation. "Traversal complete" means pagination reached the end; the old "enumeration exhausted" wording did **not** mean API quota exhaustion. Incomplete passes remain visibly partial. A full pass may take multiple polls.
+The coverage panel shows live background inventory progress separately from the last assessment's inventory/counts. It includes the next batch time, next page, current-pass count/start time, last unrestricted completion time, and cached entries awaiting revalidation. New repository discoveries enter subsequent assessments; **they are not retroactively included in older evidence or coverage counts**. "Traversal complete" means pagination reached the end; the old "enumeration exhausted" wording did **not** mean API quota exhaustion. Incomplete passes remain visibly partial. A full pass may take multiple batches.
 
-After a pass completes, the next cycle starts a new revalidation pass from page one **without discarding the previous inventory**. Previously cached entries may have changed access; their probes still report errors honestly. Removed repositories are pruned only after an unrestricted traversal completes. An SSO restriction on any page keeps the whole pass partial and prevents pruning based on that restricted view. Changing/removing credentials resets discovery, prior snapshots, history and check rotation; no credential identifier is exposed in the dashboard. Restarting the process also resets the cursor/cache; nothing is persisted to disk.
+After a pass completes, discovery waits the normal poll interval before starting a new revalidation pass from page one **without discarding the previous inventory**. Previously cached entries may have changed access; their probes still report errors honestly. Removed repositories are pruned only after an unrestricted traversal completes. An SSO restriction on any page keeps the whole pass partial and prevents pruning based on that restricted view. Changing/removing credentials resets discovery, prior snapshots, history and check rotation; no credential identifier is exposed in the dashboard. Restarting the process also resets the cursor/cache; nothing is persisted to disk.
 
 `IMPACT_MAX_REPOSITORIES` remains a hard capacity limit, not a bypassed safety bound. If reached, discovery keeps its unfinished page and reports `inventory_limit`; restart with a deliberately larger limit (up to 100000) to accommodate the inventory. No default cap, timeout, request budget or permission is silently increased. Old and in-progress generations each stay bounded by that limit; the displayed/checkable union is also capped. GitHub page-number pagination is not an atomic snapshot: additions/removals/renames during a long scan can shift pages. Repeated revalidation and deduplication reduce, but cannot eliminate, that uncertainty or detect silently hidden repositories.
 
@@ -132,7 +137,8 @@ Actions timing uses incident `started_at` (falling back to announcement `created
 ```text
 Browser (local static HTML/CSS/JS; no credentials)
   -> loopback Python HTTP server: GET /api/state, POST /api/refresh
-     -> single-flight scheduler + 10-entry in-memory summary history
+     -> single-flight scheduler: assessments + paced discovery-only batches
+        -> cached inventory + 10-entry in-memory assessment summary history
         -> public GitHub Status summary GET (no auth)
         -> credential-visible /user/repos pagination
         -> bounded concurrent GET-only evidence adapters
@@ -140,7 +146,7 @@ Browser (local static HTML/CSS/JS; no credentials)
 
 - `impact/client.py`: environment/`gh` credential resolution, fixed-origin requests, retry/backoff, pagination and budgets.
 - `impact/assessment.py`: live component mapping, conservative classifications and evidence projection.
-- `impact/monitor.py`: polling, cancellation, overlap control, rotating batches and snapshots.
+- `impact/monitor.py`: independent assessment/discovery schedules on one worker, cancellation, shared backoff, rotating checks and timestamped snapshots.
 - `impact/app.py` and `impact/static/`: local server and responsive dashboard.
 - `run.py`: file-path launcher that resolves the bundled package independently of the current directory.
 - `impact/demo.py`: network-free incident fixtures.

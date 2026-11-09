@@ -8,12 +8,12 @@ import sys
 import threading
 import time
 from collections import deque
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from typing import Callable
 
 from .assessment import assess, timestamp
-from .client import Backoff, Client, Config, InventoryState, credentials
+from .client import Backoff, Client, Config, InventoryState, credentials, inventory
 
 
 class Monitor:
@@ -32,6 +32,10 @@ class Monitor:
         self._offset = 0
         self._backoff = Backoff()
         self._inventory = InventoryState()
+        self._discovery_latest = None
+        self._discovery_error = None
+        self._discovery_busy = False
+        self._discovery_due = 0.0
         self._credential_key: bytes | None = None
         self._latest = None
         self._history: deque = deque(maxlen=10)
@@ -67,30 +71,97 @@ class Monitor:
                     self._requested = False
             if due:
                 self._cycle()
+            elif time.monotonic() >= self._discovery_due:
+                self._discover()
             with self._lock:
-                delay = max(0.01, self._next_due - time.monotonic())
+                delay = max(0.01, min(self._next_due, self._discovery_due) - time.monotonic())
             self._wake.wait(delay)
             self._wake.clear()
 
+    def _new_client(self, config: Config):
+        if self._factory:
+            client = self._factory(config, self.stop_event)
+            auth = "Deterministic fixture; no credentials or network" if self.demo else "Injected client"
+        else:
+            token, auth = credentials()
+            credential_key = hashlib.sha256(token.encode()).digest() if token else None
+            if credential_key != self._credential_key:
+                self._inventory = InventoryState()
+                self._offset = 0
+                self._credential_key = credential_key
+                with self._lock:
+                    self._latest = None
+                    self._history.clear()
+                    self._discovery_latest = None
+                    self._discovery_error = None
+                    self._discovery_due = 0.0
+                    self._next_due = 0.0
+            client = Client(token, config, self.stop_event, backoff=self._backoff)
+        with self._lock:
+            self._auth = auth
+        return client
+
+    def _discover(self):
+        """Paced discovery-only work; never repeats incident probes or history."""
+        with self._lock:
+            self._discovery_busy = True
+        delay = self.config.poll_seconds
+        try:
+            client = self._new_client(replace(
+                self.config, cycle_seconds=self.config.discovery_seconds,
+                max_requests=min(self.config.max_requests, self.config.discovery_requests),
+            ))
+            report = inventory(
+                client, state=self._inventory,
+                deadline=time.monotonic() + self.config.discovery_seconds,
+                request_limit=min(self.config.max_requests, self.config.discovery_requests),
+            )
+            reason = (report["reason"] or {}).get("kind")
+            if reason in {"inventory_deadline", "inventory_request_limit", "deadline", "request_limit"}:
+                delay = self.config.discovery_resume_seconds
+                time_budget = reason in {"inventory_deadline", "deadline"}
+                report["reason"] = {
+                    "kind": "inventory_deadline" if time_budget else "inventory_request_limit",
+                    "message": f"Discovery {'time' if time_budget else 'request'} checkpoint saved; background continuation scheduled after {delay}s",
+                }
+            if reason == "rate_limit":
+                with self._backoff.lock:
+                    delay = max(delay, self._backoff.until - time.monotonic())
+            report["updated_at"] = timestamp()
+            report["requests_used"] = client.requests
+            with self._lock:
+                self._discovery_latest = report
+                self._discovery_error = None
+        except Exception as error:
+            with self._lock:
+                self._discovery_error = {
+                    "at": timestamp(), "kind": type(error).__name__,
+                    "message": "Repository discovery failed unexpectedly; cached inventory may be stale.",
+                }
+            print(f"Discovery failed ({type(error).__name__}); no raw response logged", file=sys.stderr)
+        finally:
+            with self._lock:
+                self._discovery_busy = False
+                self._discovery_due = time.monotonic() + delay
+
     def _cycle(self):
         try:
-            if self._factory:
-                client = self._factory(self.config, self.stop_event)
-                auth = "Deterministic fixture; no credentials or network" if self.demo else "Injected client"
-            else:
-                token, auth = credentials()
-                credential_key = hashlib.sha256(token.encode()).digest() if token else None
-                if credential_key != self._credential_key:
-                    self._inventory = InventoryState()
-                    self._offset = 0
-                    self._credential_key = credential_key
-                    with self._lock:
-                        self._latest = None
-                        self._history.clear()
-                client = Client(token, self.config, self.stop_event, backoff=self._backoff)
+            if self._discovery_latest is None:
+                self._discover()
+            client = self._new_client(self.config)
+            if self._discovery_latest is None and self._discovery_error is None:
+                # Credentials changed after the last discovery snapshot.
+                self._discover()
+                client = self._new_client(self.config)
             with self._lock:
-                self._auth = auth
-            report = assess(client, self._offset, self._inventory)
+                found = copy.deepcopy(self._discovery_latest)
+                discovery_error = self._discovery_error
+            if found is None:
+                raise RuntimeError("Discovery snapshot unavailable")
+            if discovery_error:
+                found["complete"] = False
+                found["reason"] = {"kind": "discovery_error", "message": discovery_error["message"]}
+            report = assess(client, self._offset, inventory_report=found)
             with self._lock:
                 self._offset = report.pop("next_offset")
                 self._latest = report
@@ -123,6 +194,13 @@ class Monitor:
                 "next_poll_at": next_at, "server_time": timestamp(),
                 "config": asdict(self.config), "latest": self._latest,
                 "history": list(self._history), "error": self._error,
+                "discovery": {
+                    "busy": self._discovery_busy,
+                    "next_batch_at": datetime.fromtimestamp(
+                        time.time() + max(0, self._discovery_due - time.monotonic()), timezone.utc,
+                    ).isoformat(),
+                    "latest": self._discovery_latest, "error": self._discovery_error,
+                },
             })
 
     def stop(self):
