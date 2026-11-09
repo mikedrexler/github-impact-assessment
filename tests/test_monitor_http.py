@@ -295,7 +295,7 @@ class HttpTests(unittest.TestCase):
             {"Origin": "null"},
             {"Sec-Fetch-Site": "cross-site"},
         ]:
-            for method, path in [("GET", "/api/state"), ("POST", "/api/refresh")]:
+            for method, path in [("GET", "/api/state"), ("POST", "/api/refresh"), ("POST", "/api/repositories")]:
                 with self.subTest(headers=headers, method=method):
                     self.assertEqual(self.request(method, path, headers=headers)[0], 403)
 
@@ -320,6 +320,29 @@ class HttpTests(unittest.TestCase):
         )
         self.assertEqual(response.returncode, 1)
         self.assertIn("Cannot bind", response.stderr)
+
+    def test_repository_selection_endpoint_validates_body_and_queues_scope(self):
+        headers = {"Content-Type": "application/json"}
+        response = self.request("POST", "/api/repositories", json.dumps({
+            "mode": "selected", "repositories": ["example/queue-symptom"],
+        }), headers)
+        self.assertEqual(response[0], 202)
+        self.assertEqual(self.monitor.snapshot()["selection"]["pending"]["repositories"], ["example/queue-symptom"])
+        self.monitor._cycle()
+        state = json.loads(self.request("GET", "/api/state")[2])
+        self.assertEqual(state["selection"]["mode"], "selected")
+        self.assertEqual({row["repository"] for row in state["latest"]["checks"]}, {"example/queue-symptom"})
+        for value in [
+            {}, [], {"mode": "selected", "repositories": ["org/.."]},
+            {"mode": "selected", "repositories": []},
+            {"mode": "selected", "repositories": ["org/repo"], "token": "secret"},
+            {"mode": [], "repositories": []},
+        ]:
+            self.assertEqual(self.request("POST", "/api/repositories", json.dumps(value), headers)[0], 400)
+        self.assertEqual(self.request("POST", "/api/repositories", "not-json", headers)[0], 400)
+        self.assertEqual(self.request("POST", "/api/repositories", "{}", {})[0], 400)
+        self.assertEqual(self.request("POST", "/api/repositories", "x" * 49153, headers)[0], 400)
+        self.assertEqual(self.request("GET", "/api/repositories")[0], 404)
 
 
 if __name__ == "__main__":
