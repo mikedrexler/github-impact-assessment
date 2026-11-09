@@ -12,15 +12,21 @@ from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from typing import Callable
 
+from .agent import Agent
 from .assessment import assess, timestamp
 from .client import Backoff, Client, Config, InventoryState, credentials, inventory
 
 
 class Monitor:
-    def __init__(self, config: Config, *, client_factory: Callable | None = None, demo: bool = False):
+    def __init__(
+        self, config: Config, *, client_factory: Callable | None = None,
+        demo: bool = False, agent: Agent | None = None,
+    ):
         self.config = config
         self.demo = demo
         self._factory = client_factory
+        # Injected clients stay network-isolated unless a planner is also injected.
+        self._agent = agent if agent is not None else Agent.from_env(demo=demo or client_factory is not None)
         self._lock = threading.Lock()
         self.stop_event = threading.Event()
         self._wake = threading.Event()
@@ -161,7 +167,7 @@ class Monitor:
             if discovery_error:
                 found["complete"] = False
                 found["reason"] = {"kind": "discovery_error", "message": discovery_error["message"]}
-            report = assess(client, self._offset, inventory_report=found)
+            report = assess(client, self._offset, inventory_report=found, agent=self._agent)
             with self._lock:
                 self._offset = report.pop("next_offset")
                 self._latest = report

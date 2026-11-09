@@ -130,8 +130,12 @@ class Client:
                 raise ProbeError("authentication", "No configured GitHub credential")
             self.requests += 1
 
-    def _json(self, url: str, *, github: bool) -> tuple[Any, dict]:
-        for attempt in range(3):
+    def _json(
+        self, url: str, *, github: bool, deadline: float | None = None, attempts: int = 3,
+    ) -> tuple[Any, dict]:
+        for attempt in range(attempts):
+            if deadline is not None and self.clock() >= deadline:
+                raise ProbeError("deadline", "Read-only planning budget exhausted")
             self._reserve(github)
             headers = {"Accept": "application/json", "User-Agent": "github-impact-assessment/0.1"}
             if github:
@@ -139,7 +143,10 @@ class Client:
                 headers["X-GitHub-Api-Version"] = "2022-11-28"
             request = urllib.request.Request(url, headers=headers, method="GET")
             try:
-                timeout = max(0.1, min(self.config.timeout_seconds, self.deadline - self.clock()))
+                timeout = max(0.1, min(
+                    self.config.timeout_seconds, self.deadline - self.clock(),
+                    deadline - self.clock() if deadline is not None else self.config.timeout_seconds,
+                ))
                 with self._opener.open(request, timeout=timeout) as response:
                     data = response.read(MAX_RESPONSE_BYTES + 1)
                     response_headers = dict(response.headers.items())
@@ -176,7 +183,7 @@ class Client:
                 if limited:
                     service = "GitHub API" if github else "Status API"
                     raise ProbeError("rate_limit", f"{service} rate limited; checks deferred") from None
-                if status >= 500 and attempt < 2:
+                if status >= 500 and attempt < attempts - 1:
                     self._wait(attempt)
                     continue
                 kind = {
@@ -185,10 +192,10 @@ class Client:
                 }.get(status, "service_error")
                 raise ProbeError(kind, f"Read-only endpoint returned HTTP {status}") from None
             except (urllib.error.URLError, TimeoutError, OSError):
-                if attempt < 2:
+                if attempt < attempts - 1:
                     self._wait(attempt)
                     continue
-                raise ProbeError("network", "Network/timeout failure after bounded retries") from None
+                raise ProbeError("network", "Network/timeout failure after bounded attempts") from None
         raise AssertionError("unreachable")
 
     def _wait(self, attempt: int):
@@ -208,9 +215,16 @@ class Client:
         return data
 
     def get(self, path: str) -> Any:
+        return self._get(path)
+
+    def get_once(self, path: str, deadline: float) -> Any:
+        """One planner read, charged to the normal cycle budget; no retries."""
+        return self._get(path, deadline=deadline, attempts=1)
+
+    def _get(self, path: str, *, deadline: float | None = None, attempts: int = 3) -> Any:
         if not path.startswith("/") or path.startswith("//") or "\\" in path or "#" in path:
             raise ProbeError("invalid_path", "Only fixed GitHub API paths are allowed")
-        data, _ = self._json(API_ROOT + path, github=True)
+        data, _ = self._json(API_ROOT + path, github=True, deadline=deadline, attempts=attempts)
         return data
 
 

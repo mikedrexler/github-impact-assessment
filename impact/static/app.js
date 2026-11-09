@@ -91,7 +91,7 @@ function render() {
   $("notice").textContent = [...warnings, statusText].join(" ");
   $("notice").className = warnings.length ? "warning" : "";
   if (!report) {
-    for (const id of ["summary", "incidents", "components", "coverage", "checks", "inventory", "history"]) {
+    for (const id of ["summary", "incidents", "agent", "components", "coverage", "checks", "inventory", "history"]) {
       $(id).replaceChildren();
     }
     $("inventory-title").textContent = "Inventory pending";
@@ -119,6 +119,24 @@ function render() {
     $("incidents").append(card);
   }
   if (!report.incidents.length) paragraph($("incidents"), report.status_available ? "No unresolved incidents reported by GitHub Status. This is not a tenant health guarantee." : "Cannot determine current incidents.", "muted");
+  $("agent").replaceChildren();
+  const agent = report.agent;
+  if (agent) {
+    paragraph($("agent"), `Planner: ${agent.status}. ${agent.note}`);
+    if (agent.error) paragraph($("agent"), `Planner error/limit: ${agent.error}. Deterministic check-only fallback; not AI reasoning.`, "error");
+    if (agent.status === "disabled") paragraph($("agent"), "AI is not enabled (and is always disabled in demo mode). These results use deterministic checks only.", "muted");
+    if (agent.status === "idle") paragraph($("agent"), "No eligible mapped incident probe in the bounded planner scope. No model called.", "muted");
+    paragraph($("agent"), `Model calls ${agent.model_calls}/${agent.limits.model_calls}; selected reads ${agent.tool_calls}/${agent.limits.tool_calls}; at most ${agent.contexts_considered} assessment contexts considered. Remaining repositories/components still receive deterministic checks.`, "muted");
+    if (agent.status === "fallback" && agent.trace.length) paragraph($("agent"), "Validated AI selections before fallback (not a completed AI assessment):", "muted");
+    for (const step of agent.trace) {
+      const details = node("details");
+      details.append(node("summary", `${step.repository || "Planner"} / ${step.component || "stop"}: ${step.operation}`));
+      paragraph(details, `Selection rationale: ${step.reason}`);
+      paragraph(details, `Uncertainty: ${step.uncertainty}`, "muted");
+      paragraph(details, `Sanitized observation: ${JSON.stringify(step.result)}. See repository evidence for the deterministic interpretation.`);
+      $("agent").append(details);
+    }
+  }
   $("components").replaceChildren();
   for (const part of report.components) {
     const card = node("article", undefined, "component");
