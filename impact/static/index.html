@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GitHub Impact Assessment</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header>
+    <div><p class="eyebrow">LOCAL / READ-ONLY / EVIDENCE-LED</p><h1>GitHub Impact Assessment</h1></div>
+    <button id="refresh" type="button">Refresh assessment</button>
+  </header>
+  <main>
+    <div id="notice" role="status" aria-live="polite">Connecting to local monitor...</div>
+    <section class="summary" aria-label="Assessment summary" id="summary"></section>
+    <p class="principle">A status incident is not proof of tenant impact. Successful metadata reads are not proof you are unaffected. <strong>Unknown is an assessment, not an all-clear.</strong></p>
+    <section><h2>Unresolved incidents</h2><div id="incidents"></div></section>
+    <section><h2>Live Status components</h2><p class="muted">Discovered from GitHub Status. Adapter limitations remain visible even without an incident.</p><div id="components" class="grid"></div></section>
+    <section><h2>Coverage &amp; freshness</h2><div id="coverage" class="panel"></div></section>
+    <section>
+      <div class="section-title"><h2>Repository evidence</h2><label>Filter <input id="filter" type="search" placeholder="Repository, component or classification"></label></div>
+      <p class="muted" id="check-count"></p>
+      <div class="table-wrap"><table><thead><tr><th>Repository / component</th><th>Assessment</th><th>Evidence &amp; limitations</th></tr></thead><tbody id="checks"></tbody></table></div>
+      <button id="more" type="button" hidden>Show more evidence</button>
+    </section>
+    <section><h2>Discovered repositories</h2><details><summary id="inventory-title">Inventory pending</summary><div id="inventory"></div></details></section>
+    <section><h2>Recent assessment history</h2><div id="history"></div></section>
+  </main>
+  <footer>Credentials stay on this server. No workflow dispatch, writes, canaries, telemetry or external dashboard assets. History is memory-only and clears on restart. <a href="https://www.githubstatus.com" target="_blank" rel="noreferrer">GitHub Status</a></footer>
+</body>
+</html>

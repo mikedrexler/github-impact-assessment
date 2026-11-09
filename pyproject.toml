@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "github-impact-assessment"
+version = "0.1.0"
+description = "Local, evidence-led, read-only GitHub incident impact assessment"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["mypy>=1.15,<2"]
+
+[project.scripts]
+github-impact-assessment = "impact.app:main"
+
+[tool.setuptools]
+packages = ["impact"]
+
+[tool.setuptools.package-data]
+impact = ["static/*.html", "static/*.css", "static/*.js"]
+
+[tool.mypy]
+python_version = "3.11"
+check_untyped_defs = true
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+include = ["impact"]

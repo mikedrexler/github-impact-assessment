@@ -1,0 +1,62 @@
+"""Deterministic incident fixtures, shared by --demo and automated tests."""
+
+from datetime import datetime, timedelta, timezone
+
+from .client import Config, ProbeError
+
+
+class DemoClient:
+    def __init__(self, config: Config, stop):
+        self.config = config
+        self.stop = stop
+        self.requests = 0
+        self.now = datetime.now(timezone.utc)
+
+    def ago(self, minutes: int) -> str:
+        return (self.now - timedelta(minutes=minutes)).isoformat()
+
+    def status(self):
+        self.requests += 1
+        names = [
+            "Git Operations", "Webhooks", "Visit www.githubstatus.com for more information",
+            "API Requests", "Issues", "Pull Requests", "Actions", "Packages", "Pages",
+            "Copilot", "Codespaces", "Copilot AI Model Providers",
+        ]
+        components = [{"id": name.casefold().replace(" ", "-"), "name": name,
+                       "status": "degraded_performance" if name in {"Actions", "Pages", "Webhooks"} else "operational"} for name in names]
+        return {
+            "page": {"updated_at": self.ago(1)}, "status": {"description": "FIXTURE: Actions, Pages and Webhooks incident"},
+            "components": components,
+            "incidents": [{
+                "id": "demo-incident", "name": "FIXTURE: Actions queue delays",
+                "status": "investigating", "started_at": self.ago(40), "updated_at": self.ago(1),
+                "components": [part for part in components if part["name"] in {"Actions", "Pages", "Webhooks"}],
+            }],
+        }
+
+    def get(self, path: str):
+        self.requests += 1
+        if path.startswith("/user/repos?"):
+            return [
+                {"full_name": "example/queue-symptom", "has_issues": True, "has_pages": True},
+                {"full_name": "example/self-hosted", "has_issues": True, "has_pages": False},
+                {"full_name": "example/limited-access", "has_issues": False, "has_pages": False},
+            ]
+        if "/limited-access/" in path:
+            raise ProbeError("permission_or_secondary_limit", "FIXTURE: Read-only endpoint returned HTTP 403")
+        if "/actions/runs?" in path:
+            return {"total_count": 1, "workflow_runs": [{
+                "id": 101, "status": "queued", "conclusion": None,
+                "created_at": self.ago(20), "updated_at": self.ago(1),
+                "head_sha": "a" * 40,
+            }]}
+        if "/jobs?" in path:
+            return {"total_count": 1, "jobs": [{
+                "id": 201, "status": "queued", "created_at": self.ago(20),
+                "labels": ["self-hosted"] if "/self-hosted/" in path else ["ubuntu-latest"],
+            }]}
+        if "/check-runs?" in path:
+            return {"total_count": 0, "check_runs": []}
+        if path.endswith("/pages"):
+            return {"status": "built"}
+        raise ProbeError("not_found_or_hidden", "Unconfigured fixture endpoint")
