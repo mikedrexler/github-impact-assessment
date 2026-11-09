@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from impact.app import make_server
-from impact.client import Config
+from impact.client import Config, inventory
 from impact.demo import DemoClient
 from impact.monitor import Monitor
 
@@ -37,10 +37,10 @@ class MonitorTests(unittest.TestCase):
         release = threading.Event()
         real_assess = __import__("impact.assessment", fromlist=["assess"]).assess
 
-        def blocking_assess(*args):
+        def blocking_assess(*args, **kwargs):
             entered.set()
             release.wait(3)
-            return real_assess(*args)
+            return real_assess(*args, **kwargs)
 
         monitor = Monitor(Config(), client_factory=DemoClient, demo=True)
         with patch("impact.monitor.assess", side_effect=blocking_assess) as assessment:
@@ -93,10 +93,7 @@ class MonitorTests(unittest.TestCase):
     @patch("impact.monitor.credentials")
     @patch("impact.monitor.Client")
     def test_credential_changes_reset_inventory_history_and_rotation(self, client, credentials):
-        credentials.side_effect = [
-            ("first-private-token", "environment"), ("first-private-token", "environment"),
-            ("second-private-token", "environment"), (None, "No credential"),
-        ]
+        credentials.return_value = ("first-private-token", "environment")
         client.side_effect = lambda *args, **kwargs: DemoClient(Config(), threading.Event())
         monitor = Monitor(Config())
         monitor._cycle()
@@ -105,10 +102,12 @@ class MonitorTests(unittest.TestCase):
         self.assertIs(monitor._inventory, original)
         self.assertEqual(len(monitor.snapshot()["history"]), 2)
         monitor._offset = 123
+        credentials.return_value = ("second-private-token", "environment")
         monitor._cycle()
         self.assertIsNot(monitor._inventory, original)
         self.assertEqual(len(monitor.snapshot()["history"]), 1)
         changed = monitor._inventory
+        credentials.return_value = (None, "No credential")
         monitor._cycle()
         self.assertIsNot(monitor._inventory, changed)
         public = json.dumps(monitor.snapshot())
@@ -133,14 +132,122 @@ class MonitorTests(unittest.TestCase):
             clients.append(client)
             return client
 
-        monitor = Monitor(Config(max_requests=4, max_check_repositories=1), client_factory=factory)
+        monitor = Monitor(Config(max_requests=4, discovery_requests=1, max_check_repositories=1), client_factory=factory)
         monitor._cycle()
         self.assertEqual(monitor.snapshot()["latest"]["inventory"]["next_page"], 2)
-        monitor._cycle()
-        result = monitor.snapshot()["latest"]["inventory"]
-        self.assertTrue(clients[1].page_two)
+        monitor._discover()
+        result = monitor.snapshot()["discovery"]["latest"]
+        self.assertTrue(any(getattr(client, "page_two", False) for client in clients))
         self.assertTrue(result["complete"])
         self.assertEqual(result["discovered"], 100)
+        self.assertEqual(len(monitor.snapshot()["history"]), 1)
+        self.assertFalse(monitor.snapshot()["latest"]["inventory"]["complete"])
+        monitor._cycle()
+        self.assertTrue(monitor.snapshot()["latest"]["inventory"]["complete"])
+
+    def test_deadline_checkpoint_continues_before_next_assessment_without_reprobing(self):
+        calls = 0
+
+        def bounded_inventory(client, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                kwargs["deadline"] = 0
+            return inventory(client, **kwargs)
+
+        monitor = Monitor(Config(discovery_resume_seconds=1), client_factory=DemoClient, demo=True)
+        with patch("impact.monitor.inventory", side_effect=bounded_inventory), patch(
+            "impact.monitor.assess", wraps=__import__("impact.assessment", fromlist=["assess"]).assess,
+        ) as assessment:
+            monitor.start()
+            try:
+                wait_for(lambda: len(monitor.snapshot()["history"]) == 1)
+                first = monitor.snapshot()
+                self.assertEqual(first["discovery"]["latest"]["reason"]["kind"], "inventory_deadline")
+                self.assertEqual(first["latest"]["inventory"]["discovered"], 0)
+                wait_for(lambda: bool(monitor.snapshot()["discovery"]["latest"]["complete"]))
+                second = monitor.snapshot()
+                self.assertEqual(second["discovery"]["latest"]["discovered"], 3)
+                self.assertEqual(len(second["history"]), 1)
+                self.assertEqual(assessment.call_count, 1)
+                self.assertEqual(second["latest"]["completed_at"], first["latest"]["completed_at"])
+                self.assertEqual(second["latest"]["inventory"]["discovered"], 0)
+                self.assertGreater(monitor._next_due - time.monotonic(), 290)
+            finally:
+                monitor.stop()
+
+    def test_only_budget_checkpoints_use_fast_continuation(self):
+        for kind, fast in [
+            ("inventory_deadline", True), ("inventory_request_limit", True),
+            ("deadline", True), ("request_limit", True),
+            ("inventory_limit", False), ("authentication", False),
+            ("permission_or_secondary_limit", False), ("network", False),
+        ]:
+            with self.subTest(kind=kind):
+                monitor = Monitor(Config(), client_factory=DemoClient)
+                with patch("impact.monitor.inventory", return_value={"reason": {"kind": kind}, "complete": False}):
+                    monitor._discover()
+                remaining = monitor._discovery_due - time.monotonic()
+                self.assertAlmostEqual(remaining, 5 if fast else 300, delta=0.5)
+                if fast:
+                    reason = monitor.snapshot()["discovery"]["latest"]["reason"]
+                    self.assertIn("checkpoint saved", reason["message"])
+                    self.assertIn("after 5s", reason["message"])
+                    self.assertNotIn("Assessment", reason["message"])
+
+    def test_discovery_rate_limit_honors_shared_cooldown(self):
+        monitor = Monitor(Config(), client_factory=DemoClient)
+        monitor._backoff.until = time.monotonic() + 1000
+        with patch("impact.monitor.inventory", return_value={"reason": {"kind": "rate_limit"}, "complete": False}):
+            monitor._discover()
+        self.assertGreaterEqual(monitor._discovery_due, monitor._backoff.until)
+
+    @patch("impact.monitor.credentials")
+    @patch("impact.monitor.Client")
+    def test_credential_change_during_discovery_requests_fresh_assessment(self, client, credentials):
+        credentials.return_value = ("old-private-token", "environment")
+        client.side_effect = lambda *args, **kwargs: DemoClient(Config(), threading.Event())
+        monitor = Monitor(Config())
+        monitor._cycle()
+        self.assertIsNotNone(monitor.snapshot()["latest"])
+        credentials.return_value = ("new-private-token", "environment")
+        monitor._discover()
+        self.assertIsNone(monitor.snapshot()["latest"])
+        self.assertEqual(monitor.snapshot()["history"], [])
+        self.assertLessEqual(monitor._next_due, time.monotonic())
+        self.assertTrue(monitor.snapshot()["discovery"]["latest"]["complete"])
+
+    def test_standalone_discovery_client_has_independent_bounds(self):
+        configs = []
+
+        def factory(config, stop):
+            configs.append(config)
+            return DemoClient(config, stop)
+
+        monitor = Monitor(Config(max_requests=5, discovery_requests=10, discovery_seconds=2), client_factory=factory)
+        monitor._discover()
+        self.assertEqual(configs[0].cycle_seconds, 2)
+        self.assertEqual(configs[0].max_requests, 5)
+        self.assertEqual(len(monitor.snapshot()["history"]), 0)
+
+    def test_discovery_exception_is_visible_and_sanitized(self):
+        monitor = Monitor(Config(), client_factory=DemoClient)
+        monitor._cycle()
+        with patch("impact.monitor.inventory", side_effect=RuntimeError("sentinel-secret")), patch("impact.monitor.sys.stderr"):
+            monitor._discover()
+        snapshot = monitor.snapshot()
+        self.assertEqual(snapshot["discovery"]["error"]["kind"], "RuntimeError")
+        self.assertNotIn("sentinel-secret", json.dumps(snapshot))
+        monitor._cycle()
+        self.assertFalse(monitor.snapshot()["latest"]["coverage"]["complete"])
+        self.assertEqual(monitor.snapshot()["latest"]["inventory"]["reason"]["kind"], "discovery_error")
+
+    def test_stop_interrupts_background_continuation_wait(self):
+        monitor = Monitor(Config(discovery_requests=1, discovery_resume_seconds=300), client_factory=DemoClient)
+        monitor.start()
+        wait_for(lambda: len(monitor.snapshot()["history"]) == 1)
+        monitor.stop()
+        self.assertFalse(monitor._thread.is_alive())
 
 
 class HttpTests(unittest.TestCase):

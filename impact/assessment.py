@@ -215,7 +215,10 @@ def probe(client: Client, repo: dict, component: dict, incident: dict, now: date
     return row
 
 
-def assess(client: Client, offset: int = 0, inventory_state: InventoryState | None = None) -> dict:
+def assess(
+    client: Client, offset: int = 0, inventory_state: InventoryState | None = None,
+    *, inventory_report: dict | None = None,
+) -> dict:
     started = timestamp()
     errors = []
     try:
@@ -225,7 +228,7 @@ def assess(client: Client, offset: int = 0, inventory_state: InventoryState | No
         status = {"components": [], "incidents": []}
         status_available = False
         errors.append({"source": "status", "kind": error.kind, "message": error.message})
-    found = inventory(
+    found = inventory_report if inventory_report is not None else inventory(
         client, deadline=time.monotonic() + client.config.cycle_seconds / 2,
         request_limit=client.config.max_requests // 2 if client.config.max_requests >= 4 else None,
         state=inventory_state,

@@ -73,6 +73,8 @@ function renderChecks() {
 }
 function render() {
   const report = state.latest;
+  const discovery = state.discovery;
+  const known = discovery?.latest || report?.inventory;
   $("refresh").disabled = state.busy || state.refresh_pending || state.stopped;
   $("refresh").textContent = state.busy ? "Assessment running..." : "Refresh assessment";
   const age = report ? Math.max(0, (Date.now() - new Date(report.completed_at)) / 1000) : 0;
@@ -80,6 +82,7 @@ function render() {
   const warnings = [];
   if (state.demo) warnings.push("FIXTURE DEMO - synthetic evidence; no live monitoring.");
   if (state.error) warnings.push(`${state.error.message} (${state.error.kind}, ${date(state.error.at)})`);
+  if (discovery?.error) warnings.push(`${discovery.error.message} (${discovery.error.kind})`);
   if (stale) warnings.push("STALE snapshot: do not treat as current evidence.");
   if (report && !report.status_available) warnings.push("GitHub Status unavailable; incident state is unknown.");
   if (state.stopped) warnings.push("Monitoring stopped.");
@@ -101,7 +104,7 @@ function render() {
     ["Unresolved incidents", report.incidents.length],
     ["Suspected assessments", report.counts.suspected],
     ["Unknown assessments", report.counts.unknown],
-    ["Repositories discovered", report.inventory.discovered],
+    ["Repositories discovered", known.discovered],
   ]) {
     const metric = node("div", undefined, "metric");
     metric.append(node("strong", value), node("span", label));
@@ -125,17 +128,22 @@ function render() {
     $("components").append(card);
   }
   $("coverage").replaceChildren();
-  paragraph($("coverage"), `Repository discovery: ${report.inventory.complete ? "traversal complete for credential-visible scope" : "IN PROGRESS / PARTIAL"}. ${report.inventory.discovered} known; ${report.coverage.repositories_selected} selected for this incident cycle; ${report.coverage.repositories_deferred} repositories / ${report.coverage.assessments_deferred} assessments deferred; ${report.coverage.check_errors} probe errors.`);
-  paragraph($("coverage"), `${report.inventory.next_page ? `Next discovery page: ${report.inventory.next_page}; progress resumes automatically next cycle.` : "Discovery pass reached its end; next cycle revalidates from page 1."} Current pass: ${report.inventory.scan_discovered} discovered, started ${date(report.inventory.scan_started_at)}. Last unrestricted pass completed: ${date(report.inventory.last_completed_at)}. ${report.inventory.cached_repositories} cached entries awaiting revalidation.`, "muted");
-  paragraph($("coverage"), report.inventory.scope);
-  paragraph($("coverage"), report.inventory.access_caveat, "error");
-  if (report.inventory.reason) paragraph($("coverage"), `${report.inventory.reason.kind}: ${report.inventory.reason.message}`, "error");
+  paragraph($("coverage"), `Background discovery: ${known.complete ? "traversal complete for credential-visible scope" : "IN PROGRESS / PARTIAL"}. ${known.discovered} known. ${discovery?.busy ? "Batch running." : `Next batch ${date(discovery?.next_batch_at)}.`} Discovery continues independently of the assessment poll interval.`);
+  paragraph($("coverage"), `${known.next_page ? `Next discovery page: ${known.next_page}; saved progress resumes automatically in a background batch.` : "Discovery pass reached its end; revalidation waits for the configured poll interval."} Current pass: ${known.scan_discovered} discovered, started ${date(known.scan_started_at)}. Last unrestricted pass completed: ${date(known.last_completed_at)}. ${known.cached_repositories} cached entries awaiting revalidation.`, "muted");
+  paragraph($("coverage"), known.scope);
+  paragraph($("coverage"), known.access_caveat, "error");
+  if (known.reason) {
+    const paused = ["inventory_deadline", "inventory_request_limit", "deadline", "request_limit"].includes(known.reason.kind);
+    paragraph($("coverage"), `${paused ? "Checkpoint saved" : known.reason.kind}: ${known.reason.message}`, paused ? "muted" : "error");
+  }
+  paragraph($("coverage"), `Last assessment used ${report.inventory.discovered} repositories known at that time: ${report.coverage.repositories_selected} selected; ${report.coverage.repositories_deferred} repositories / ${report.coverage.assessments_deferred} assessments deferred; ${report.coverage.check_errors} probe errors. Newly discovered repositories enter subsequent assessments, not this historical snapshot.`);
   for (const error of report.errors) paragraph($("coverage"), `${error.source} / ${error.kind}: ${error.message}`, "error");
   paragraph($("coverage"), `${report.coverage.complete ? "Bounded cycle complete" : "PARTIAL / limited coverage"}. ${report.coverage.note}`);
   paragraph($("coverage"), `Snapshot ${date(report.completed_at)} (${Math.floor(age)}s ago); cycle started ${date(report.started_at)}. Status feed updated ${date(report.status_updated_at)}. Next poll ${state.busy ? "after current assessment" : date(state.next_poll_at)}.`);
   paragraph($("coverage"), `Authentication: ${state.authentication}. Requests used ${report.requests_used}/${state.config.max_requests}; interval ${state.config.poll_seconds}s; cycle budget ${state.config.cycle_seconds}s; concurrency ${state.config.workers}. No adapter currently emits confirmed impact; no "unaffected" classification.`, "muted");
-  $("inventory-title").textContent = `${report.inventory.discovered} repositories (${report.inventory.complete ? "credential-visible discovery complete" : "resumable discovery / partial inventory"})`;
-  $("inventory").replaceChildren(...report.inventory.repositories.map((repo) => link(repo.name + (repo.archived ? " (archived)" : ""), repo.url)));
+  paragraph($("coverage"), `Discovery batch limits: ${state.config.discovery_seconds}s / ${Math.min(state.config.max_requests, state.config.discovery_requests)} attempts; continuation delay ${state.config.discovery_resume_seconds}s; latest batch updated ${date(known.updated_at)}. Background discovery does not repeat incident probes or extend assessment history.`, "muted");
+  $("inventory-title").textContent = `${known.discovered} repositories (${known.complete ? "credential-visible discovery complete" : "resumable discovery / partial inventory"})`;
+  $("inventory").replaceChildren(...known.repositories.map((repo) => link(repo.name + (repo.archived ? " (archived)" : ""), repo.url)));
   $("history").replaceChildren();
   for (const item of state.history) {
     paragraph($("history"), `${date(item.completed_at)} | ${item.incidents} incidents | ${item.discovered} repositories | ${item.counts.suspected} suspected, ${item.counts.unknown} unknown | ${item.coverage_complete ? "bounded cycle complete" : "partial"}`, "history-row");
