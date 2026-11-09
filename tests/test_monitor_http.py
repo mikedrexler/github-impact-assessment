@@ -275,7 +275,8 @@ class HttpTests(unittest.TestCase):
         return status, response_headers, data
 
     def test_dashboard_state_assets_and_privacy_headers(self):
-        for path in ["/", "/app.js", "/style.css", "/api/state"]:
+        for path in ["/", "/app.js", "/ui.js", "/style.css", "/api/state",
+                     "/past-incidents", "/past.js", "/api/past-incidents"]:
             with self.subTest(path=path):
                 status, headers, data = self.request("GET", path)
                 self.assertEqual(status, 200)
@@ -287,6 +288,9 @@ class HttpTests(unittest.TestCase):
         state = json.loads(self.request("GET", "/api/state")[2])
         self.assertTrue(state["demo"])
         self.assertEqual(state["latest"]["counts"]["suspected"], 1)
+        past = json.loads(self.request("GET", "/api/past-incidents")[2])
+        self.assertEqual(past["incidents"][0]["assessment"]["counts"]["suspected"], 1)
+        self.assertIn(b'aria-current="page">Past Incidents', self.request("GET", "/past-incidents")[2])
 
     def test_cross_origin_and_rebinding_rejected(self):
         for headers in [
@@ -295,7 +299,7 @@ class HttpTests(unittest.TestCase):
             {"Origin": "null"},
             {"Sec-Fetch-Site": "cross-site"},
         ]:
-            for method, path in [("GET", "/api/state"), ("POST", "/api/refresh")]:
+            for method, path in [("GET", "/api/state"), ("GET", "/api/past-incidents"), ("POST", "/api/refresh")]:
                 with self.subTest(headers=headers, method=method):
                     self.assertEqual(self.request(method, path, headers=headers)[0], 403)
 

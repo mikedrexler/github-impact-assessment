@@ -1,0 +1,49 @@
+{
+  "source": "https://www.githubstatus.com/api/v2/incidents/tp8cghg7tlc4.json",
+  "retrieved_at": "2026-11-09",
+  "incident": {
+    "id": "tp8cghg7tlc4",
+    "name": "Incident with Actions and Checks API",
+    "status": "resolved",
+    "started_at": "2026-11-09T18:12:37.232Z",
+    "created_at": "2026-11-09T18:12:37.242Z",
+    "resolved_at": "2026-11-09T18:59:32.565Z",
+    "components": [
+      {"id": "4230lsnqdsld", "name": "Webhooks", "status": "operational"},
+      {"id": "br0l2tvcx85d", "name": "Actions", "status": "operational"},
+      {"id": "vg70hn9s2tyj", "name": "Pages", "status": "operational"}
+    ]
+  },
+  "updates": [
+    {
+      "at": "2026-11-09T18:12:37.331Z",
+      "status": "investigating",
+      "components": {"br0l2tvcx85d": "partial_outage"}
+    },
+    {
+      "at": "2026-11-09T18:14:58.589Z",
+      "status": "investigating",
+      "components": {"br0l2tvcx85d": "major_outage"}
+    },
+    {
+      "at": "2026-11-09T18:23:13.543Z",
+      "status": "investigating",
+      "components": {"4230lsnqdsld": "degraded_performance", "br0l2tvcx85d": "major_outage"}
+    },
+    {
+      "at": "2026-11-09T18:30:17.563Z",
+      "status": "investigating",
+      "components": {"vg70hn9s2tyj": "degraded_performance", "4230lsnqdsld": "degraded_performance", "br0l2tvcx85d": "major_outage"}
+    },
+    {
+      "at": "2026-11-09T18:43:24.557Z",
+      "status": "monitoring",
+      "components": {"vg70hn9s2tyj": "operational", "4230lsnqdsld": "operational", "br0l2tvcx85d": "operational"}
+    },
+    {
+      "at": "2026-11-09T18:59:32.565Z",
+      "status": "resolved",
+      "components": {"vg70hn9s2tyj": "operational", "4230lsnqdsld": "operational", "br0l2tvcx85d": "operational"}
+    }
+  ]
+}

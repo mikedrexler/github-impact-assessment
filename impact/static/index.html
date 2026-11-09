@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GitHub Impact Assessment</title>
   <link rel="stylesheet" href="/style.css">
+  <script src="/ui.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -13,6 +14,7 @@
     <button id="refresh" type="button">Refresh assessment</button>
   </header>
   <main>
+    <nav aria-label="Main navigation"><a href="/" aria-current="page">Live assessment</a> <a href="/past-incidents">Past Incidents</a></nav>
     <div id="notice" role="status" aria-live="polite">Connecting to local monitor...</div>
     <section class="summary" aria-label="Assessment summary" id="summary"></section>
     <p class="principle">A status incident is not proof of tenant impact. Successful metadata reads are not proof you are unaffected. <strong>Unknown is an assessment, not an all-clear.</strong></p>

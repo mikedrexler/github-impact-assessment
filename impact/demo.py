@@ -60,3 +60,16 @@ class DemoClient:
         if path.endswith("/pages"):
             return {"status": "built"}
         raise ProbeError("not_found_or_hidden", "Unconfigured fixture endpoint")
+
+    def past_incidents(self):
+        self.requests += 1
+        incident = self.status()["incidents"][0]
+        return {"incidents": [
+            {**incident, "status": "resolved", "resolved_at": self.ago(0),
+             "incident_updates": [
+                 {"created_at": self.ago(40), "status": "investigating", "body": "FIXTURE: Investigating queue delays."},
+                 {"created_at": self.ago(0), "status": "resolved", "body": "FIXTURE: Incident resolved."},
+             ]},
+            {**incident, "id": "demo-older", "name": "FIXTURE: Earlier incident",
+             "started_at": self.ago(1440), "status": "resolved", "resolved_at": self.ago(1400)},
+        ]}
