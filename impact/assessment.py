@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from itertools import islice
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from .client import Client, InventoryState, ProbeError, inventory, repository_path
+
+if TYPE_CHECKING:
+    from .agent import Agent
+
+
+class ReadClient(Protocol):
+    def get(self, path: str) -> Any: ...
 
 
 def timestamp() -> str:
@@ -94,7 +102,7 @@ def validate_states(rows: list):
                 raise ProbeError("invalid_response", "Endpoint returned an invalid status/conclusion")
 
 
-def actions(client: Client, repo: dict, incident: dict, row: dict, now: datetime):
+def actions(client: ReadClient, repo: dict, incident: dict, row: dict, now: datetime):
     path = repository_path(repo["name"])
     data = object_data(client.get(path + "/actions/runs?per_page=30&page=1"))
     runs = list_data(data.get("workflow_runs"))
@@ -165,7 +173,7 @@ def actions(client: Client, repo: dict, incident: dict, row: dict, now: datetime
     )
 
 
-def probe(client: Client, repo: dict, component: dict, incident: dict, now: datetime) -> dict:
+def probe(client: ReadClient, repo: dict, component: dict, incident: dict, now: datetime) -> dict:
     adapter = adapter_for(component["name"])
     row = {
         "repository": repo["name"], "repository_url": repo["url"],
@@ -217,8 +225,10 @@ def probe(client: Client, repo: dict, component: dict, incident: dict, now: date
 
 def assess(
     client: Client, offset: int = 0, inventory_state: InventoryState | None = None,
-    *, inventory_report: dict | None = None,
+    *, inventory_report: dict | None = None, agent: Agent | None = None,
 ) -> dict:
+    from .agent import MAX_CONTEXTS, Agent, ProbeContext
+
     started = timestamp()
     errors = []
     try:
@@ -267,12 +277,18 @@ def assess(
     ))
     selected_count = len({repo["name"] for repo, _, _ in tasks})
 
-    def check(task: tuple) -> dict:
+    contexts = [ProbeContext(client, repo, component, incident, now)
+                for repo, component, incident in tasks[:MAX_CONTEXTS]]
+    agent_report = (agent or Agent()).run(contexts, getattr(client, "stop", threading.Event()))
+
+    def check(indexed_task: tuple) -> dict:
+        index, task = indexed_task
         repo, component, incident = task
-        return probe(client, repo, component, incident, now)
+        reader = contexts[index] if index < len(contexts) else client
+        return probe(reader, repo, component, incident, now)
 
     with ThreadPoolExecutor(max_workers=client.config.workers) as pool:
-        rows = list(pool.map(check, tasks))
+        rows = list(pool.map(check, enumerate(tasks)))
     for warning in sorted(getattr(client, "access_warnings", set())):
         errors.append({"source": "github", "kind": "sso_partial_results", "message": warning})
     counts = {key: sum(row["classification"] == key for row in rows)
@@ -296,7 +312,7 @@ def assess(
             "url": "https://www.githubstatus.com/incidents/" + item["id"],
             "components": [part.get("id") for part in item.get("components", []) if isinstance(part, dict)],
         } for item in incidents],
-        "inventory": found, "checks": rows, "counts": counts, "errors": errors,
+        "inventory": found, "checks": rows, "counts": counts, "errors": errors, "agent": agent_report,
         "coverage": {
             "repositories_selected": selected_count,
             "repositories_deferred": len(repos) - selected_count if mapped else 0,
