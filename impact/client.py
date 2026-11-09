@@ -131,8 +131,12 @@ class Client:
                 raise ProbeError("authentication", "No configured GitHub credential")
             self.requests += 1
 
-    def _json(self, url: str, *, github: bool) -> tuple[Any, dict]:
-        for attempt in range(3):
+    def _json(
+        self, url: str, *, github: bool, deadline: float | None = None, attempts: int = 3,
+    ) -> tuple[Any, dict]:
+        for attempt in range(attempts):
+            if deadline is not None and self.clock() >= deadline:
+                raise ProbeError("deadline", "Read-only planning budget exhausted")
             self._reserve(github)
             headers = {"Accept": "application/json", "User-Agent": "github-impact-assessment/0.1"}
             if github:
@@ -140,7 +144,10 @@ class Client:
                 headers["X-GitHub-Api-Version"] = "2022-11-28"
             request = urllib.request.Request(url, headers=headers, method="GET")
             try:
-                timeout = max(0.1, min(self.config.timeout_seconds, self.deadline - self.clock()))
+                timeout = max(0.1, min(
+                    self.config.timeout_seconds, self.deadline - self.clock(),
+                    deadline - self.clock() if deadline is not None else self.config.timeout_seconds,
+                ))
                 with self._opener.open(request, timeout=timeout) as response:
                     data = response.read(MAX_RESPONSE_BYTES + 1)
                     response_headers = dict(response.headers.items())
@@ -177,7 +184,7 @@ class Client:
                 if limited:
                     service = "GitHub API" if github else "Status API"
                     raise ProbeError("rate_limit", f"{service} rate limited; checks deferred") from None
-                if status >= 500 and attempt < 2:
+                if status >= 500 and attempt < attempts - 1:
                     self._wait(attempt)
                     continue
                 kind = {
@@ -186,10 +193,10 @@ class Client:
                 }.get(status, "service_error")
                 raise ProbeError(kind, f"Read-only endpoint returned HTTP {status}") from None
             except (urllib.error.URLError, TimeoutError, OSError):
-                if attempt < 2:
+                if attempt < attempts - 1:
                     self._wait(attempt)
                     continue
-                raise ProbeError("network", "Network/timeout failure after bounded retries") from None
+                raise ProbeError("network", "Network/timeout failure after bounded attempts") from None
         raise AssertionError("unreachable")
 
     def _wait(self, attempt: int):
@@ -209,9 +216,16 @@ class Client:
         return data
 
     def get(self, path: str) -> Any:
+        return self._get(path)
+
+    def get_once(self, path: str, deadline: float) -> Any:
+        """One planner read, charged to the normal cycle budget; no retries."""
+        return self._get(path, deadline=deadline, attempts=1)
+
+    def _get(self, path: str, *, deadline: float | None = None, attempts: int = 3) -> Any:
         if not path.startswith("/") or path.startswith("//") or "\\" in path or "#" in path:
             raise ProbeError("invalid_path", "Only fixed GitHub API paths are allowed")
-        data, _ = self._json(API_ROOT + path, github=True)
+        data, _ = self._json(API_ROOT + path, github=True, deadline=deadline, attempts=attempts)
         return data
 
     def past_incidents(self) -> dict:
@@ -222,9 +236,27 @@ class Client:
 
 
 def repository_path(name: str) -> str:
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", name):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}", name) or any(
+        part in {".", ".."} for part in name.split("/")
+    ):
         raise ProbeError("invalid_response", "GitHub returned an invalid repository name")
     return "/repos/" + name
+
+
+def repository_selection(value: Any, limit: int) -> tuple[str, ...]:
+    """Validate an explicit list; never interpret URLs, query strings or paths."""
+    if not isinstance(value, list) or not value or len(value) > min(limit, 200):
+        raise ValueError(f"Select 1..{min(limit, 200)} repositories")
+    names: dict[str, str] = {}
+    for name in value:
+        if not isinstance(name, str):
+            raise ValueError("Each repository must be an owner/repo name")
+        try:
+            repository_path(name)
+        except ProbeError:
+            raise ValueError("Use exact owner/repo names, not URLs or paths") from None
+        names.setdefault(name.casefold(), name)
+    return tuple(names.values())
 
 
 @dataclass
@@ -238,13 +270,81 @@ class InventoryState:
     started_at: str | None = None
     completed_at: str | None = None
     sso_partial: bool = False
+    selection_errors: list[dict] = field(default_factory=list)
+
+
+def selected_inventory(
+    client: Client, names: tuple[str, ...], state: InventoryState,
+    deadline: float | None, request_limit: int | None,
+) -> dict:
+    if not state.scanning:
+        state.pending = {}
+        state.next_page = 1
+        state.scanning = True
+        state.started_at = datetime.now(timezone.utc).isoformat()
+        state.selection_errors = []
+    reason = None
+    while state.next_page <= len(names):
+        try:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise ProbeError("inventory_deadline", "Selected repository validation checkpoint saved")
+            if request_limit is not None and client.requests >= request_limit:
+                raise ProbeError("inventory_request_limit", "Selected repository request checkpoint saved")
+            name = names[state.next_page - 1]
+            row = client.get(repository_path(name))
+            if not isinstance(row, dict) or not isinstance(row.get("full_name"), str):
+                raise ProbeError("invalid_response", "Selected repository metadata is invalid")
+            if row["full_name"].casefold() != name.casefold():
+                raise ProbeError("repository_mismatch", "Repository identity differs from the explicit selection; update the selection")
+            state.pending[name] = {
+                "name": name, "url": f"https://github.com/{name}",
+                "archived": bool(row.get("archived")),
+                "has_issues": row.get("has_issues") if isinstance(row.get("has_issues"), bool) else None,
+                "has_pages": row.get("has_pages") if isinstance(row.get("has_pages"), bool) else None,
+            }
+            if getattr(client, "access_warnings", set()):
+                state.selection_errors.append({
+                    "repository": name, "kind": "sso_partial_results",
+                    "message": "SSO restrictions reported; selected repository coverage is partial",
+                })
+            state.next_page += 1
+        except ProbeError as error:
+            if error.kind in {"inventory_deadline", "inventory_request_limit", "deadline", "request_limit", "rate_limit", "cancelled"}:
+                reason = {"kind": error.kind, "message": error.message}
+                break
+            state.selection_errors.append({
+                "repository": names[state.next_page - 1], "kind": error.kind, "message": error.message,
+            })
+            state.next_page += 1
+    if state.next_page > len(names):
+        state.scanning = False
+        state.repositories = state.pending.copy()
+        if not state.selection_errors:
+            state.completed_at = datetime.now(timezone.utc).isoformat()
+    repositories = list(state.pending.values())
+    if not names:
+        reason = {"kind": "scope_paused", "message": "Repository checks paused; select repositories or explicitly enable account-wide discovery"}
+    return {
+        "repositories": repositories, "complete": reason is None and not state.selection_errors,
+        "reason": reason or ({"kind": "selected_repository_errors", "message": "Some selected repositories could not be validated; see repository errors"} if state.selection_errors else None),
+        "repository_errors": list(state.selection_errors),
+        "discovered": len(repositories), "selected_count": len(names), "next_page": None,
+        "next_repository": state.next_page if state.scanning else None,
+        "scan_started_at": state.started_at, "last_completed_at": state.completed_at,
+        "scan_discovered": len(repositories), "cached_repositories": 0,
+        "scope": f"Explicit selection only: {len(names)} repositories. No account or organization repository enumeration.",
+        "access_caveat": "Only successfully validated selected repositories are assessed. Missing access, hidden/renamed repositories and failed reads remain gaps, not unaffected.",
+    }
 
 
 def inventory(
     client: Client, *, deadline: float | None = None,
     request_limit: int | None = None, state: InventoryState | None = None,
+    selected: tuple[str, ...] | None = None,
 ) -> dict:
     state = state if state is not None else InventoryState()
+    if selected is not None:
+        return selected_inventory(client, selected, state, deadline, request_limit)
     if not state.scanning:
         state.pending = {}
         state.next_page = 1

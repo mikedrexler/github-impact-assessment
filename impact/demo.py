@@ -36,11 +36,17 @@ class DemoClient:
 
     def get(self, path: str):
         self.requests += 1
+        fixtures = {
+            "example/queue-symptom": {"has_issues": True, "has_pages": True},
+            "example/self-hosted": {"has_issues": True, "has_pages": False},
+            "example/limited-access": {"has_issues": False, "has_pages": False},
+        }
+        if path.startswith("/repos/") and path.removeprefix("/repos/") in fixtures:
+            name = path.removeprefix("/repos/")
+            return {"full_name": name, **fixtures[name]}
         if path.startswith("/user/repos?"):
             return [
-                {"full_name": "example/queue-symptom", "has_issues": True, "has_pages": True},
-                {"full_name": "example/self-hosted", "has_issues": True, "has_pages": False},
-                {"full_name": "example/limited-access", "has_issues": False, "has_pages": False},
+                {"full_name": name, **metadata} for name, metadata in fixtures.items()
             ]
         if "/limited-access/" in path:
             raise ProbeError("permission_or_secondary_limit", "FIXTURE: Read-only endpoint returned HTTP 403")

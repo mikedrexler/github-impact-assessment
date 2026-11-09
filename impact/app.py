@@ -1,4 +1,4 @@
-"""Loopback-only HTTP dashboard. The only POST schedules local read-only work."""
+"""Loopback-only dashboard. POSTs configure/schedule local read-only monitoring."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 
-from .client import Config
+from .client import Config, repository_selection
 from .demo import DemoClient
 from .monitor import Monitor
 
@@ -84,6 +84,25 @@ def handler_for(monitor: Monitor):
         def do_POST(self):
             if not self._allowed():
                 return self._json(403, {"error": "Only same-origin loopback access is allowed"})
+            if self.path == "/api/repositories":
+                if self.headers.get("Transfer-Encoding") or self.headers.get("Content-Type") != "application/json":
+                    return self._json(400, {"error": "Repository selection requires bounded JSON"})
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 1 <= length <= 49152:
+                        raise ValueError("Repository selection body must be 1..49152 bytes")
+                    raw = self.rfile.read(length)
+                    if len(raw) != length:
+                        raise ValueError("Incomplete repository selection")
+                    data = json.loads(raw)
+                    if not isinstance(data, dict) or set(data) != {"mode", "repositories"} or not isinstance(data["repositories"], list):
+                        raise ValueError("Expected mode and repository list only")
+                    status = monitor.select_repositories(data["mode"], data["repositories"])
+                except (ValueError, UnicodeDecodeError, TypeError, RecursionError):
+                    return self._json(400, {"error": "Invalid selection: provide selected/all/paused mode and valid owner/repo names within the displayed limit"})
+                except (OSError, TimeoutError):
+                    return self._json(408, {"error": "Repository selection body timed out"})
+                return self._json(202 if status == "accepted" else 200 if status == "unchanged" else 409, {"status": status})
             if self.path != "/api/refresh":
                 return self._json(404, {"error": "Not found"})
             if self.headers.get("Transfer-Encoding") or self.headers.get("Content-Length", "0") != "0":
@@ -103,12 +122,19 @@ def make_server(monitor: Monitor) -> ThreadingHTTPServer:
 def main():
     parser = argparse.ArgumentParser(description="Local read-only GitHub incident impact monitor")
     parser.add_argument("--demo", action="store_true", help="Use incident fixtures only: no network or authentication")
+    parser.add_argument("--repos", nargs="+", metavar="OWNER/REPO", help="Start with exact repositories; skips account-wide discovery")
+    parser.add_argument("--all-repositories", action="store_true", help="Opt in to credential-visible account-wide discovery")
     args = parser.parse_args()
     try:
         config = Config.from_env()
+        if args.repos and args.all_repositories:
+            parser.error("--repos and --all-repositories are mutually exclusive")
+        selected = repository_selection(args.repos, config.max_repositories) if args.repos else (
+            None if args.all_repositories or args.demo else ()
+        )
     except ValueError as error:
         parser.error(str(error))
-    monitor = Monitor(config, client_factory=DemoClient if args.demo else None, demo=args.demo)
+    monitor = Monitor(config, client_factory=DemoClient if args.demo else None, demo=args.demo, selected=selected)
     try:
         server = make_server(monitor)
     except OSError:

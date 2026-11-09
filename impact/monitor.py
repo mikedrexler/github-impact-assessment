@@ -12,16 +12,22 @@ from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from typing import Callable
 
+from .agent import Agent
 from .assessment import assess, timestamp
-from .client import Backoff, Client, Config, InventoryState, ProbeError, credentials, inventory
+from .client import Backoff, Client, Config, InventoryState, ProbeError, credentials, inventory, repository_selection
 from .history import EVIDENCE_LIMIT, HISTORY_LIMIT, incident_order, project_incidents
 
 
 class Monitor:
-    def __init__(self, config: Config, *, client_factory: Callable | None = None, demo: bool = False):
+    def __init__(
+        self, config: Config, *, client_factory: Callable | None = None,
+        demo: bool = False, agent: Agent | None = None, selected: tuple[str, ...] | None = None,
+    ):
         self.config = config
         self.demo = demo
         self._factory = client_factory
+        # Injected clients stay network-isolated unless a planner is also injected.
+        self._agent = agent if agent is not None else Agent.from_env(demo=demo or client_factory is not None)
         self._lock = threading.Lock()
         self.stop_event = threading.Event()
         self._wake = threading.Event()
@@ -46,6 +52,49 @@ class Monitor:
         self._past_error = None
         self._past_updated_at = None
         self._incident_evidence: dict[str, dict] = {}
+        self._selected = repository_selection(list(selected), config.max_repositories) if selected else selected
+        self._pending_selection: dict | None = None
+
+    def select_repositories(self, mode: str, repositories: list) -> str:
+        if not isinstance(mode, str) or mode not in {"selected", "all", "paused"}:
+            raise ValueError("Scope mode must be selected, all or paused")
+        if mode == "selected":
+            names = repository_selection(repositories, self.config.max_repositories)
+        elif repositories:
+            raise ValueError("All/paused scope must not include repositories")
+        else:
+            names = ()
+        with self._lock:
+            if self.stop_event.is_set():
+                return "stopped"
+            requested = {"mode": mode, "repositories": list(names)}
+            active = {
+                "mode": "all" if self._selected is None else "selected" if self._selected else "paused",
+                "repositories": list(self._selected or ()),
+            }
+            if requested == (self._pending_selection or active):
+                return "unchanged"
+            self._pending_selection = requested
+            self._wake.set()
+        return "accepted"
+
+    def _apply_selection(self):
+        """Only the scheduler changes scope, after any in-flight batch completes."""
+        with self._lock:
+            if self._pending_selection is None:
+                return
+            pending = self._pending_selection
+            self._pending_selection = None
+            self._selected = None if pending["mode"] == "all" else tuple(pending["repositories"])
+            self._inventory = InventoryState()
+            self._offset = 0
+            self._latest = None
+            self._history.clear()
+            self._error = None
+            self._discovery_latest = None
+            self._discovery_error = None
+            self._discovery_due = self._next_due = 0.0
+            self._requested = False
 
     def start(self):
         with self._lock:
@@ -69,6 +118,7 @@ class Monitor:
 
     def _loop(self):
         while not self.stop_event.is_set():
+            self._apply_selection()
             with self._lock:
                 due = self._requested or time.monotonic() >= self._next_due
                 if due:
@@ -117,10 +167,12 @@ class Monitor:
                 self.config, cycle_seconds=self.config.discovery_seconds,
                 max_requests=min(self.config.max_requests, self.config.discovery_requests),
             ))
+            scope_args = {"selected": self._selected} if self._selected is not None else {}
             report = inventory(
                 client, state=self._inventory,
                 deadline=time.monotonic() + self.config.discovery_seconds,
                 request_limit=min(self.config.max_requests, self.config.discovery_requests),
+                **scope_args,
             )
             reason = (report["reason"] or {}).get("kind")
             if reason in {"inventory_deadline", "inventory_request_limit", "deadline", "request_limit"}:
@@ -151,6 +203,7 @@ class Monitor:
                 self._discovery_due = time.monotonic() + delay
 
     def _cycle(self):
+        self._apply_selection()
         try:
             if self._discovery_latest is None:
                 self._discover()
@@ -167,7 +220,7 @@ class Monitor:
             if discovery_error:
                 found["complete"] = False
                 found["reason"] = {"kind": "discovery_error", "message": discovery_error["message"]}
-            report = assess(client, self._offset, inventory_report=found)
+            report = assess(client, self._offset, inventory_report=found, agent=self._agent)
             self._collect_past(client)
             report["requests_used"] = client.requests
             with self._lock:
@@ -245,6 +298,12 @@ class Monitor:
                 "stopped": self.stop_event.is_set(), "authentication": self._auth,
                 "next_poll_at": next_at, "server_time": timestamp(),
                 "config": asdict(self.config), "latest": self._latest,
+                "selection": {
+                    "mode": "all" if self._selected is None else "selected" if self._selected else "paused",
+                    "repositories": list(self._selected or ()),
+                    "pending": self._pending_selection,
+                    "limit": min(self.config.max_repositories, 200),
+                },
                 "history": list(self._history), "error": self._error,
                 "discovery": {
                     "busy": self._discovery_busy,

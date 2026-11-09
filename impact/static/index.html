@@ -16,18 +16,49 @@
   <main>
     <nav aria-label="Main navigation"><a href="/" aria-current="page">Live assessment</a> <a href="/past-incidents">Past Incidents</a></nav>
     <div id="notice" role="status" aria-live="polite">Connecting to local monitor...</div>
+    <section class="panel" aria-labelledby="repository-selection-title">
+      <h2 id="repository-selection-title">Repositories to assess</h2>
+      <p>Preselect exact repositories without crawling your organizations. Only selected repositories are validated and assessed; all existing access and read-only safeguards still apply.</p>
+      <form id="repository-selection">
+        <label for="assessed-repository">Add repository to assess</label>
+        <select id="assessed-repository" aria-describedby="assessed-repository-help"><option value="">Choose a repository...</option></select>
+        <p id="assessed-repository-help" class="muted">Choose from already-known repositories to add to your selection, then click Assess selected repositories. No crawl is triggered. Enter a new owner/repo below if it is not listed.</p>
+        <label for="repository-names">Selected repositories (one <code>owner/repo</code> per line, or comma-separated; remove a name to exclude it)</label>
+        <textarea id="repository-names" rows="4" spellcheck="false" placeholder="my-org/service-api&#10;my-org/web-app" aria-describedby="selection-help"></textarea>
+        <p id="selection-help" class="muted">Selection is kept on this server until restart, not in browser storage. Use --repos owner/repo at startup to preselect before any discovery.</p>
+        <div class="scope-actions">
+          <button type="submit" id="apply-repositories">Assess selected repositories</button>
+          <button type="button" id="pause-repositories">Pause repository checks</button>
+        </div>
+      </form>
+      <p id="selection-status" role="status" aria-live="polite">Loading repository scope...</p>
+      <details><summary>Account-wide discovery (optional)</summary>
+        <p class="muted">This enumerates repositories visible to your credentials across organizations. It is not required for explicit selection.</p>
+        <button type="button" id="all-repositories">Discover all accessible repositories</button>
+      </details>
+    </section>
     <section class="summary" aria-label="Assessment summary" id="summary"></section>
     <p class="principle">A status incident is not proof of tenant impact. Successful metadata reads are not proof you are unaffected. <strong>Unknown is an assessment, not an all-clear.</strong></p>
     <section><h2>Unresolved incidents</h2><div id="incidents"></div></section>
+    <section><h2>Optional AI check planner</h2><div id="agent" class="panel"></div></section>
     <section><h2>Live Status components</h2><p class="muted">Discovered from GitHub Status. Adapter limitations remain visible even without an incident.</p><div id="components" class="grid"></div></section>
     <section><h2>Coverage &amp; freshness</h2><div id="coverage" class="panel"></div></section>
     <section>
-      <div class="section-title"><h2>Repository evidence</h2><label>Filter <input id="filter" type="search" placeholder="Repository, component or classification"></label></div>
+      <div class="section-title">
+        <h2>Repository evidence</h2>
+        <div class="evidence-filters">
+          <label for="evidence-repository">Repository
+            <select id="evidence-repository" aria-describedby="evidence-filter-help"><option value="">All repositories</option></select>
+          </label>
+          <label>Filter <input id="filter" type="search" placeholder="Component, classification or text"></label>
+        </div>
+      </div>
+      <p class="muted" id="evidence-filter-help">Choose a repository to view its evidence. This filters existing results only; it does not change which repositories are assessed.</p>
       <p class="muted" id="check-count"></p>
       <div class="table-wrap"><table><thead><tr><th>Repository / component</th><th>Assessment</th><th>Evidence &amp; limitations</th></tr></thead><tbody id="checks"></tbody></table></div>
       <button id="more" type="button" hidden>Show more evidence</button>
     </section>
-    <section><h2>Discovered repositories</h2><details><summary id="inventory-title">Inventory pending</summary><div id="inventory"></div></details></section>
+    <section><h2>Scoped repository inventory</h2><details><summary id="inventory-title">Inventory pending</summary><div id="inventory"></div></details></section>
     <section><h2>Recent assessment history</h2><div id="history"></div></section>
   </main>
   <footer>Credentials stay on this server. No workflow dispatch, writes, canaries, telemetry or external dashboard assets. History is memory-only and clears on restart. <a href="https://www.githubstatus.com" target="_blank" rel="noreferrer">GitHub Status</a></footer>

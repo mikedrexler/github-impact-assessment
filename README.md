@@ -1,6 +1,6 @@
 # GitHub Impact Assessment
 
-A local dashboard that polls **GitHub Status**, discovers repositories visible to your existing credentials, and correlates unresolved incidents with **read-only evidence** in those repositories. It never dispatches workflows, creates canaries, or changes a monitored repository.
+A local dashboard that polls **GitHub Status**, assesses repositories you preselect (or explicitly opt in to discover), and correlates unresolved incidents with **read-only evidence** in those repositories. It never dispatches workflows, creates canaries, or changes a monitored repository.
 
 **Unknown is not unaffected.** A public incident is not proof of your impact, and a successful metadata read is not proof that a service works. This application deliberately cannot promise definitive impact detection for every GitHub service.
 
@@ -25,15 +25,37 @@ Keep `run.py` next to the `impact/` directory; do not copy it out of the checkou
 
 Open **http://127.0.0.1:8765**. The server binds to loopback only. Leave the process running for monitoring; Ctrl-C or SIGTERM stops it. It is not a hosted service, launch agent, or background daemon by default. No monitoring occurs after exit or while the computer sleeps. On some systems use `python` rather than `python3`.
 
+### Preselect repositories instead of crawling organizations
+
+Normal startup **does not enumerate repositories**. Public Status polling starts, but repository checks remain paused until you choose a scope in **Repositories to assess**:
+
+1. Use **Add repository to assess** to choose already-known repositories from the dropdown, or enter new exact `owner/repo` names below, one per line or comma-separated. Dropdown choices add to a draft list; remove a name from that list to exclude it. On a fresh start with no known repositories, enter names first. Populating or using the dropdown never triggers account/organization discovery.
+2. Click **Assess selected repositories**. The server validates only those names via `GET /repos/{owner}/{repo}` and assesses only successfully validated selected repositories when mapped incidents exist. No `/user/repos` or organization-wide enumeration occurs.
+3. Use **Pause repository checks** to stop repository discovery/probes while retaining public Status polling. Account-wide discovery is available separately under **Account-wide discovery (optional)**; it is never required to populate the selection.
+
+Names are deduplicated case-insensitively. URLs, paths, query strings, invalid names and selections larger than `min(IMPACT_MAX_REPOSITORIES, 200)` are rejected. The selection is **server-memory-only**, shared by tabs using that server, and clears on restart; it is not saved in browser storage or a config file. To start immediately with the same explicit list on each launch, use:
+
+```sh
+python3 run.py --repos my-org/service-api my-org/web-app
+# Explicit opt-in to the previous account-wide discovery behavior:
+python3 run.py --all-repositories
+```
+
+`--repos` and `--all-repositories` are mutually exclusive. Changing scope queues a switch after the current bounded assessment/discovery batch finishes; the UI labels this pending state. The switch clears old inventory, evidence, summary history and rotation before scheduling the new scope. It does not interrupt an in-flight HTTP request or bypass existing time/request/backoff limits.
+
+Selected metadata validation uses the existing paced discovery budgets and resumes at the next unfinished selected name. Missing permissions, 404/hidden or renamed repositories, invalid responses and SSO restrictions remain visible coverage gaps; they are not silently replaced or considered unaffected. Only exact matching identities are accepted. Failed names are retried on the normal discovery interval, while rate/time/request checkpoints retain their existing cooldown/resume behavior. A selected repository's metadata can be revalidated without scanning any organization's repository list.
+
 To try synthetic incident paths without credentials or network requests:
 
 ```sh
 python3 run.py --demo
 # Or use a different port if the live monitor is already running:
 IMPACT_PORT=8766 python3 run.py --demo
+# Exercise explicit selection against the fixtures:
+python3 run.py --demo --repos example/queue-symptom example/self-hosted
 ```
 
-The demo is prominently labeled **FIXTURE DEMO**, includes a queued-job symptom, a self-hosted runner confounder, a permission failure and Pages/Webhooks limitations. Its times are relative to startup; its responses are deterministic otherwise. It is not a live health assessment.
+The demo is prominently labeled **FIXTURE DEMO**, includes a queued-job symptom, a self-hosted runner confounder, a permission failure and Pages/Webhooks limitations. Demo startup without scope flags loads all three fixture repositories, not your actual accounts; the selection interface also works with those fixture names. Its times are relative to startup; its responses are deterministic otherwise. It is not a live health assessment.
 
 Optional installation for launching by module or command from any directory (use a dedicated environment, not the system Python):
 
@@ -51,8 +73,8 @@ Installing into `.venv` does not install into a different `python3` on your PATH
 
 ## Authentication, scope and privacy
 
-- Reuse existing `gh` authentication or an already available environment token. The app does not request, create, broaden, or refresh tokens/organization permissions. Tokens stay server-side, in memory, and are attached **only** to GET requests to `https://api.github.com`. Redirects are rejected. The public Status API receives no credentials.
-- Repository discovery paginates `GET /user/repos` with owner, collaborator and organization-member affiliations. This is the meaningful enumerable "all accessible repositories" scope, **not all public repositories on GitHub**, and not a guarantee of all repositories your user account can access. Fine-grained token selection, GitHub App identity, organization policy, SSO and permissions can silently hide repositories. Every dashboard snapshot carries this caveat even when traversal completes. This version targets **github.com**, not GHES or `.ghe.com`.
+- Reuse existing `gh` authentication or an already available environment token. The app does not request, create, broaden, or refresh tokens/organization permissions. GitHub tokens stay server-side, in memory, and are attached **only** to GET requests to `https://api.github.com`. Redirects are rejected. The public Status API receives no credentials. The optional AI provider uses its own separate server-side credential, described below.
+- Explicit selection reads only exact selected repository metadata and incident evidence; it does not enumerate accounts or organizations. Optional account-wide discovery paginates `GET /user/repos` with owner, collaborator and organization-member affiliations. This is the meaningful enumerable "all accessible repositories" scope, **not all public repositories on GitHub**, and not a guarantee of all repositories your user account can access. Fine-grained token selection, GitHub App identity, organization policy, SSO and permissions can silently hide repositories. Every dashboard snapshot carries its scope/access caveat. This version targets **github.com**, not GHES or `.ghe.com`.
 - Existing credentials must have access to the relevant repositories. Depending on token type, the probes need read access to metadata, Contents (commit sample), Actions runs/jobs, Checks, Issues, Pull requests and Pages. Missing access produces an explicit unknown/error; do not grant admin or write permissions just to improve this dashboard. Classic PATs/OAuth tokens may have broader scopes than needed; the application still sends GET only.
 - An SSO `partial-results` response marks enumeration partial. A 403 is labeled permission-or-secondary-limit (GitHub does not always distinguish these via headers), and a 404 can mean absent **or hidden**. SSO can also silently hide entire organizations. Authentication failures, service errors and rate limits never count as confirmed impact.
 - No request logs, workflow logs, webhook payloads, private code, repository secrets or raw error response bodies are collected. Evidence is reduced to names, timestamps, status/conclusions, counts and links. Repository names/evidence remain private data: do not expose this port, reverse proxy it, or share its API responses publicly. Any local user/process with access to loopback can read the dashboard; it is not an authenticated multi-user server.
@@ -61,7 +83,7 @@ Installing into `.venv` does not install into a different `python3` on your PATH
 
 ## Monitoring and bounded coverage
 
-Startup performs one short discovery batch, then the first assessment. Later assessments read the latest inventory snapshot without waiting for enumeration. Repository discovery has its own paced background schedule, including when there are no incidents. Repository probes run **only** for unresolved incidents with matching live component IDs. No incident is fabricated. A degraded component without a mapped incident is explicitly flagged. Unscoped incidents and newly introduced components are surfaced as gaps instead of guessed from titles.
+Startup polls Status with repository work paused unless a startup scope is configured (demo defaults to fixture scope). With a scope enabled, startup performs one short selected-validation or account-discovery batch, then the first assessment. Later assessments read the latest scoped inventory snapshot without waiting for enumeration. Repository discovery/validation has its own paced background schedule, including when there are no incidents. Repository probes run **only** for unresolved incidents with matching live component IDs. No incident is fabricated. A degraded component without a mapped incident is explicitly flagged. Unscoped incidents and newly introduced components are surfaced as gaps instead of guessed from titles.
 
 The dashboard offers manual refresh, incident/component cards, per-repository evidence and error reasons, inventory, filtering, sample limits, timestamps, freshness, and in-memory history. It polls the local server every 5 seconds; that does not cause a GitHub poll. Only one worker performs network work: due assessments take priority over discovery batches, so they never overlap or multiply request concurrency. A running discovery batch may delay an assessment until the batch yields. Manual assessment requests deduplicate, with a 10-second throttle. Periodic assessment polling is measured **after the previous assessment completes**. Discovery-only batches do not rerun incident probes, advance check rotation, or add history entries. Exceptions retain the previous timestamped snapshot with a visible failure/staleness warning.
 
@@ -90,7 +112,13 @@ An in-flight read can overrun a phase's wall-clock budget, but clients do not st
 
 The deadline prevents new network attempts, not instantaneous interruption of in-flight socket I/O. Shutdown cancels pending starts/backoff and waits briefly for in-flight reads. Offline, permission, API errors and budget exhaustion remain visible as unknown/partial; they never become an all-clear.
 
+### Filtering repository evidence
+
+The **Repository** dropdown in **Repository evidence** lists repositories with results in the current assessment. Select one repository or **All repositories**, and optionally combine it with the text filter. The selection survives dashboard refreshes while that repository still has results; it resets to all repositories if the repository leaves the assessment. This is a local display filter only: it does not change monitoring scope or trigger repository discovery/probes. Use **Repositories to assess** above to change the assessed scope.
+
 ### Workaround for large inventories: resumable discovery
+
+This section describes opt-in **account-wide** discovery. Prefer explicit selection above if only a few repositories need monitoring.
 
 Discovery **continues at the next unfinished page** after time/request limits, transient failures, or rate limits rather than restarting at page one. Each background batch adds to a bounded, memory-only inventory. **`inventory_deadline` is now a resumable checkpoint, not a five-minute stall:** the scheduler queues another discovery-only batch after `IMPACT_DISCOVERY_RESUME_SECONDS`. The coverage panel labels expected time/request checkpoints as **Checkpoint saved**, while genuine errors remain visible. Manual refresh reads the cache instead of restarting enumeration and respects the same backoff.
 
@@ -140,27 +168,69 @@ Classifications:
 
 Actions timing uses incident `started_at` (falling back to announcement `created_at`), not titles or arbitrary failure counts. Completed runs last updated before that point are historical; active runs can overlap. Incident onset can precede announcement, so samples can miss real impact. A job's **creation age is not continuous queue duration**. Self-hosted queues remain unknown rather than being attributed to GitHub. Application test failures, timeouts and external check-app failures are recorded without assuming platform failure. Even successful incident-time runs do not establish "unaffected." Missing job creation time prevents a queue-age inference.
 
+## Optional bounded AI incident planner
+
+The app remains dependency-free and fully functional **without AI**. Opting in adds an untrusted, server-side planner that interprets the **already Status-mapped component category** and selects from existing read-only evidence checks. It can choose a follow-up based on the previous sanitized result: for example, sample Actions runs, inspect jobs for an incident-overlapping run, then sample that run's commit checks. It cannot infer affected components from incident titles, broaden repository scope, dispatch workflows, or decide impact.
+
+### Provider and deployment configuration
+
+This integration uses the current [OpenAI Responses API](https://developers.openai.com/api/reference/resources/responses/methods/create) directly through Python's standard-library HTTPS client, with [strict Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs). There is no SDK dependency, MCP server, provider tool access, model browsing, code execution or agent framework. Check the [model catalog](https://developers.openai.com/api/docs/models) and your project's permissions for a model supporting **Responses plus strict JSON-schema output**. There is deliberately **no default model or assumed API entitlement**. Model availability, cost, regional restrictions and schema support vary; unsupported/unavailable models fall back rather than being silently replaced.
+
+Set these on the **local server process**, using your trusted environment/secret manager:
+
+| Variable | Meaning |
+|---|---|
+| `IMPACT_AI_PROVIDER` | Unset disables AI. Only `openai` is supported. |
+| `IMPACT_AI_MODEL` | Required explicit provider model ID (1..100 letters, digits, `_`, `.`, `:`, `-`). |
+| `OPENAI_API_KEY` | Separate OpenAI credential; never a GitHub token. Required only with AI enabled. |
+
+Restart `python3 run.py` after changing AI settings. `.env` is not loaded. Do not put credentials in the browser, source, command-line arguments, logs or committed files. No API keys or raw provider response/error text are returned by `/api/state` or persisted by the app. **Demo mode always disables the provider**, even if these variables are set.
+
+Keep the dashboard loopback-only; this is not a hosted, multi-user deployment. Opt-in adds one fixed outbound origin, `https://api.openai.com/v1/responses`, to the existing GitHub destinations. The provider key is sent only to that endpoint; GitHub credentials never enter its request. Provider redirects are rejected, and custom base URLs are not accepted. The standard trusted proxy/CA caveat still applies.
+
+### Execution and safety contract
+
+- The host, not the model, builds the available check list from a maximum of **4 existing repository/incident/component assessment contexts** in the current rotating batch. Repository names, run IDs and commit SHAs are replaced with local aliases. Only unresolved incidents with matching live component IDs are eligible. Disabled Issues/Pages flags and unsupported adapters cannot be overridden.
+- The allowlist is repository metadata, one commit, one PR, one issue, Pages configuration, Actions runs, run jobs, and commit check runs. Each matches an existing deterministic GET endpoint. Jobs are allowed only for the first 5 incident-overlapping runs returned by the current runs sample; commit checks require a validated SHA from such a run and a prior job read. Numeric run IDs, SHAs, repository paths, aliases and available operations are revalidated at execution.
+- A typed plan has exactly five fields: repository alias, operation enum, target alias, rationale code, and uncertainty code. Strict JSON schema is requested, then **independently validated locally**, including rejecting extra fields, invented targets, repeated selections, wrong types and out-of-scope operations. The model cannot supply URLs, repository names, shell commands, code or arbitrary arguments. Selection rationales are intentionally constrained codes rendered as fixed prose, not free-form claims or hidden chain-of-thought.
+- At most **4 model calls and 3 selected probe GET attempts per assessment cycle**, not per repository. Model output is capped at **500 tokens per call** (at most 2,000 output tokens/cycle); serialized input is capped at **16 KiB/call**, responses at **64 KiB**. There are no provider retries, conversation history IDs or unbounded loops. The planner starts no new work after **20 seconds or one quarter of the configured cycle budget**, whichever is smaller, and never beyond the existing client deadline. Each model/probe request has a socket timeout of at most **5 seconds**, further limited by the remaining budget. As with other clients, a socket timeout is not a hard wall-clock interrupt of an in-flight read.
+- Planner GETs have no retries and consume the existing GitHub cycle request budget/backoff; they cannot add permissions or bypass rate limits. The single-flight scheduler plus a nonblocking planner lock prevents overlapping planner calls. Provider authentication, availability, HTTP, network and rate-limit errors suppress further provider calls for **at least 300 seconds** across refreshes. The normal assessment interval still applies. These finite caps bound requests, not a dollar price; use provider-side spend controls and choose the model deliberately.
+- **Deterministic adapters and classifier always run**, including after model stop, malformed/refused output, invalid plans, unavailable models, timeout, rate limit or absent key. Successfully selected reads are reused so the baseline need not issue them again; the rest of the original deterministic checks still execute under their existing budgets. Cached read failures remain explicit unknown/errors. AI never removes baseline evidence or changes classifications. No adapter gains `confirmed` or `unaffected`.
+
+The dashboard and `/api/state` expose `disabled`, `idle`, `completed` or `fallback` planner status, fixed error/limit codes, counts, validated selections, constrained rationales, sanitized observations and uncertainty. `completed` means only the bounded planning pass ended, **not** complete coverage or healthy service. `idle` means no eligible check in the bounded planner scope. On failure, any earlier validated selections remain visible, but subsequent deterministic-only results are explicitly labeled fallback, never presented as AI reasoning. Other repositories/components continue to receive deterministic checks; AI does not claim exhaustive coverage.
+
+### Data sharing and limitations
+
+Opt-in sends only component adapter/status enums, an unresolved-mapped-incident marker, ephemeral repository/run aliases, available check enums, and sanitized observations (sample/failure/queue/self-hosted counts, incident-overlapping run aliases, or a generic read-error marker). It does **not** send incident titles/bodies, repository names/URLs/metadata, code, issue/PR text, workflow/job names/logs, raw labels, run IDs, SHAs, raw API results, error messages, or either credential. The model receives no direct network tools. The dashboard can still show local repository names/evidence as before; do not share its snapshots publicly.
+
+Requests set `store: false` and do not use server-side conversations. This is **not a promise of zero provider retention**: OpenAI's account/data-processing and abuse-monitoring policies still apply. Obtain any required approval before sharing even these aggregate signals. GitHub reads and provider results live only in process memory; raw model output is discarded after validation. No real provider inference is required by tests, and availability/quality for your configured model is not guaranteed. Without provider access the application continues deterministic monitoring with a visible fallback reason.
+
 ## Architecture
 
 ```text
 Browser (local static HTML/CSS/JS; no credentials)
-  -> loopback Python HTTP server: GET /api/state, GET /api/past-incidents, POST /api/refresh
+  -> loopback Python HTTP server: GET /api/state, GET /api/past-incidents, POST /api/refresh, POST /api/repositories
      -> single-flight scheduler: assessments + paced discovery-only batches
         -> cached inventory + 10-entry in-memory assessment summary history
         -> public GitHub Status summary + bounded incident history GET (no auth)
-        -> credential-visible /user/repos pagination
+        -> exact selected /repos/{owner}/{repo} validation (no enumeration)
+           OR explicitly enabled credential-visible /user/repos pagination
         -> bounded concurrent GET-only evidence adapters
+        -> optional bounded AI planner (fixed OpenAI Responses origin)
+           -> host-validated selections + sanitized read observations
+           -> reused GET evidence; deterministic classifier owns verdicts
 ```
 
-- `impact/client.py`: environment/`gh` credential resolution, fixed-origin requests, retry/backoff, pagination and budgets.
+- `impact/client.py`: environment/`gh` credential resolution, fixed-origin requests, explicit repository-name validation, scoped metadata reads, retry/backoff, pagination and budgets.
 - `impact/assessment.py`: live component mapping, conservative classifications and evidence projection.
+- `impact/agent.py`: optional strict-schema provider client, scoped read allowlist, sequential planner, sanitization, budgets and explicit fallback trace.
 - `impact/monitor.py`: independent assessment/discovery schedules on one worker, cancellation, shared backoff, rotating checks and timestamped snapshots.
 - `impact/history.py`: bounded public history projection and incident-date ordering; monitor retains separate incident-time evidence in memory.
 - `impact/app.py` and `impact/static/`: local server and responsive dashboard.
 - `run.py`: file-path launcher that resolves the bundled package independently of the current directory.
 - `impact/demo.py`: network-free incident fixtures.
 
-**No agents, MCP servers, AI models, external databases, hosted services or GitHub Actions workflows are required or created for this application.** All assessment logic is deterministic Python. The only application outbound destinations are GitHub Status and GitHub's REST API (subject to your trusted proxy settings). There are no active checks or monitored-repository mutations. A dashboard refresh is a local scheduling operation, not a GitHub write.
+**No AI provider, MCP server, external database, hosted service or GitHub Actions workflow is required.** Impact classification remains deterministic Python. By default the only outbound destinations are GitHub Status and GitHub's REST API (subject to your trusted proxy settings); explicitly enabling the optional planner adds the fixed OpenAI endpoint above. There are no active checks or monitored-repository mutations. A dashboard refresh is a local scheduling operation, not a GitHub write.
 
 ## Development and verification
 
@@ -177,11 +247,13 @@ python3 -m venv .venv
 npm exec --yes --package=pyright -- pyright impact
 # Optional JS parse check if Node.js is installed:
 node --check impact/static/app.js
+# Dependency-free frontend behavior tests (requires Node.js):
+node --test tests/test_evidence_filter.js
 # Build the installable wheel (requires pip and the declared setuptools build backend):
 python3 -m pip wheel --no-deps --wheel-dir dist .
 ```
 
-The offline unittest suite covers all current/future component mapping, no-incident/unknown status paths, pagination, SSO/permission/rate-limit errors, retries/budgets, incident timing, queue thresholds, self-hosting, application failure non-attribution, scheduler deduplication/periodic polling, bounded history, HTTP routes, cross-origin rejection and credential boundaries. Mypy checks the Python application (including annotated and unannotated bodies); runtime guards validate external response shapes. The frontend is served directly without a JavaScript build pipeline.
+The offline unittest suite covers all current/future component mapping, no-incident/unknown status paths, pagination, SSO/permission/rate-limit errors, retries/budgets, incident timing, queue thresholds, self-hosting, application failure non-attribution, scheduler deduplication/periodic polling, bounded history, HTTP routes, cross-origin rejection and credential boundaries. Selection tests cover paused startup, exact-name validation, no account/organization crawl, selected-only incident checks, resumable validation, permission/identity gaps, scope transitions, bounded JSON and cross-origin rejection. Mocked planner tests cover adaptive follow-ups, malicious plans, schema/argument rejection, status/feature constraints, request/iteration/time bounds, provider errors, credential/data boundaries, read reuse and deterministic fallback. No test calls a real model. Mypy checks the Python application (including annotated and unannotated bodies); runtime guards validate external response shapes. The frontend is served directly without a JavaScript build pipeline.
 
 `tests/fixtures/incident_2026_11_09.json` preserves the public timestamps, component IDs and status transitions of [the November 9 incident](https://www.githubstatus.com/incidents/tp8cghg7tlc4). Its source API URL is included in the fixture. The replay verifies Actions-only onset, Webhooks/Pages expansion, monitoring and resolution, with a frozen-clock assessment. **All repository/run/job evidence in these offline tests is synthetic**, not a record of your environment during the outage. These tests do not alter the live dashboard or claim historical tenant impact.
 
