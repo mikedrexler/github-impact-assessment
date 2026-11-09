@@ -34,6 +34,15 @@ function badge(value) {
   return node("span", value.replaceAll("_", " "), `badge ${allowed.includes(value) ? value : "unknown"}`);
 }
 function paragraph(parent, text, cls) { parent.append(node("p", text, cls)); }
+function renderPage() {
+  const configuration = window.location.hash === "#configuration";
+  $("configuration-panel").hidden = !configuration;
+  $("dashboard-panel").hidden = configuration;
+  for (const [id, active] of [["configuration-tab", configuration], ["dashboard-tab", !configuration]]) {
+    if (active) $(id).setAttribute("aria-current", "page");
+    else $(id).removeAttribute("aria-current");
+  }
+}
 function selectedRepositoryNames() {
   return $("repository-names").value.split(/[\s,]+/).filter(Boolean);
 }
@@ -317,5 +326,7 @@ $("repository-selection").addEventListener("submit", (event) => {
 });
 $("pause-repositories").addEventListener("click", () => saveSelection("paused"));
 $("all-repositories").addEventListener("click", () => saveSelection("all"));
+window.addEventListener("hashchange", renderPage);
+renderPage();
 load();
 setInterval(load, 5000);

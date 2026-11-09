@@ -13,7 +13,13 @@
     <button id="refresh" type="button">Refresh assessment</button>
   </header>
   <main>
+    <nav class="page-tabs" aria-label="Dashboard navigation">
+      <a id="dashboard-tab" href="#dashboard" aria-controls="dashboard-panel" aria-current="page">Impact assessment</a>
+      <a id="configuration-tab" href="#configuration" aria-controls="configuration-panel">Configuration</a>
+    </nav>
     <div id="notice" role="status" aria-live="polite">Connecting to local monitor...</div>
+    <div id="configuration-panel" aria-labelledby="configuration-tab" hidden>
+    <h2 class="page-heading">Configuration</h2>
     <section class="panel" aria-labelledby="repository-selection-title">
       <h2 id="repository-selection-title">Repositories to assess</h2>
       <p>Preselect exact repositories without crawling your organizations. Only selected repositories are validated and assessed; all existing access and read-only safeguards still apply.</p>
@@ -35,6 +41,9 @@
         <button type="button" id="all-repositories">Discover all accessible repositories</button>
       </details>
     </section>
+    </div>
+    <div id="dashboard-panel" aria-labelledby="dashboard-tab">
+    <p class="muted">Manage repositories to assess in <a href="#configuration">Configuration</a>.</p>
     <section class="summary" aria-label="Assessment summary" id="summary"></section>
     <p class="principle">A status incident is not proof of tenant impact. Successful metadata reads are not proof you are unaffected. <strong>Unknown is an assessment, not an all-clear.</strong></p>
     <section><h2>Unresolved incidents</h2><div id="incidents"></div></section>
@@ -58,6 +67,7 @@
     </section>
     <section><h2>Scoped repository inventory</h2><details><summary id="inventory-title">Inventory pending</summary><div id="inventory"></div></details></section>
     <section><h2>Recent assessment history</h2><div id="history"></div></section>
+    </div>
   </main>
   <footer>Credentials stay on this server. No workflow dispatch, writes, canaries, telemetry or external dashboard assets. History is memory-only and clears on restart. <a href="https://www.githubstatus.com" target="_blank" rel="noreferrer">GitHub Status</a></footer>
 </body>
