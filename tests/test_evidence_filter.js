@@ -17,6 +17,8 @@ class Element {
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
   addEventListener(event, handler) { this.events[event] = handler; }
+  setAttribute(name, value) { this[name] = value; }
+  removeAttribute(name) { delete this[name]; }
   get options() { return this.children; }
 }
 
@@ -31,6 +33,7 @@ function dashboard(checks = []) {
   };
   const context = vm.createContext({
     document, URL, AbortSignal,
+    window: {location: {hash: ""}, addEventListener: () => {}},
     fetch: () => new Promise(() => {}),
     setInterval: () => {},
   });
@@ -152,4 +155,22 @@ test("assessed dropdown avoids duplicates and supports manually entered reposito
   assert.equal(app.element("repository-names").value, "Org/Repo");
   app.run("selectionSaving = true; renderAssessedRepositoryDropdown();");
   assert.equal(app.element("assessed-repository").disabled, true);
+});
+
+test("configuration navigation isolates repository controls and preserves draft state", () => {
+  const app = dashboard();
+  assert.equal(app.element("dashboard-panel").hidden, false);
+  assert.equal(app.element("configuration-panel").hidden, true);
+  assert.equal(app.element("dashboard-tab")["aria-current"], "page");
+  app.element("repository-names").value = "org/draft";
+  app.run('window.location.hash = "#configuration"; renderPage();');
+  assert.equal(app.element("configuration-panel").hidden, false);
+  assert.equal(app.element("dashboard-panel").hidden, true);
+  assert.equal(app.element("configuration-tab")["aria-current"], "page");
+  assert.equal(app.element("dashboard-tab")["aria-current"], undefined);
+  app.run('window.location.hash = "#dashboard"; renderPage();');
+  assert.equal(app.element("repository-names").value, "org/draft");
+  assert.equal(app.element("configuration-panel").hidden, true);
+  app.run('window.location.hash = "#unknown"; renderPage();');
+  assert.equal(app.element("dashboard-panel").hidden, false);
 });
