@@ -27,7 +27,7 @@ Open **http://127.0.0.1:8765**. The server binds to loopback only. Leave the pro
 
 ### Preselect repositories instead of crawling organizations
 
-Normal startup **does not enumerate repositories**. Public Status polling starts, but repository checks remain paused until you choose a scope in **Repositories to assess**:
+Normal startup **does not enumerate repositories**. Public Status polling starts, but repository checks remain paused until you open the **Configuration** tab and choose a scope in **Repositories to assess**. The **Impact assessment** tab contains results and evidence; switching tabs preserves unapplied repository edits and does not trigger discovery or assessment. The Configuration tab can be linked directly using `/#configuration`, and browser back/forward navigation is supported.
 
 1. Use **Add repository to assess** to choose already-known repositories from the dropdown, or enter new exact `owner/repo` names below, one per line or comma-separated. Dropdown choices add to a draft list; remove a name from that list to exclude it. On a fresh start with no known repositories, enter names first. Populating or using the dropdown never triggers account/organization discovery.
 2. Click **Assess selected repositories**. The server validates only those names via `GET /repos/{owner}/{repo}` and assesses only successfully validated selected repositories when mapped incidents exist. No `/user/repos` or organization-wide enumeration occurs.
@@ -114,7 +114,7 @@ The deadline prevents new network attempts, not instantaneous interruption of in
 
 ### Filtering repository evidence
 
-The **Repository** dropdown in **Repository evidence** lists repositories with results in the current assessment. Select one repository or **All repositories**, and optionally combine it with the text filter. The selection survives dashboard refreshes while that repository still has results; it resets to all repositories if the repository leaves the assessment. This is a local display filter only: it does not change monitoring scope or trigger repository discovery/probes. Use **Repositories to assess** above to change the assessed scope.
+The **Repository** dropdown in **Repository evidence** lists repositories with results in the current assessment. Select one repository or **All repositories**, and optionally combine it with the text filter. The selection survives dashboard refreshes while that repository still has results; it resets to all repositories if the repository leaves the assessment. This is a local display filter only: it does not change monitoring scope or trigger repository discovery/probes. Use **Repositories to assess** in the **Configuration** tab to change the assessed scope.
 
 ### Workaround for large inventories: resumable discovery
 
