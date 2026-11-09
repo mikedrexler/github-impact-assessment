@@ -12,27 +12,47 @@ Requires Python **3.11+**. The runtime and test suite use only the standard libr
 git clone https://github.com/mikedrexler/github-impact-assessment.git
 cd github-impact-assessment
 # Uses GH_TOKEN, then GITHUB_TOKEN, then existing gh authentication for github.com.
-python3 -m impact
+python3 run.py
 ```
+
+You can also launch **from any directory** using the checkout's file path; Python automatically resolves the bundled `impact` package beside the launcher:
+
+```sh
+python3 /absolute/path/github-impact-assessment/run.py
+```
+
+Keep `run.py` next to the `impact/` directory; do not copy it out of the checkout. `python3 -m impact` remains supported **from the repository root**, or from any directory after installing the package into that same Python interpreter. Without one of those conditions, Python correctly reports `No module named impact`. No global installation or `PYTHONPATH` modification is needed for the file launcher.
 
 Open **http://127.0.0.1:8765**. The server binds to loopback only. Leave the process running for monitoring; Ctrl-C or SIGTERM stops it. It is not a hosted service, launch agent, or background daemon by default. No monitoring occurs after exit or while the computer sleeps. On some systems use `python` rather than `python3`.
 
 To try synthetic incident paths without credentials or network requests:
 
 ```sh
-python3 -m impact --demo
+python3 run.py --demo
 # Or use a different port if the live monitor is already running:
-IMPACT_PORT=8766 python3 -m impact --demo
+IMPACT_PORT=8766 python3 run.py --demo
 ```
 
 The demo is prominently labeled **FIXTURE DEMO**, includes a queued-job symptom, a self-hosted runner confounder, a permission failure and Pages/Webhooks limitations. Its times are relative to startup; its responses are deterministic otherwise. It is not a live health assessment.
 
-Optional installation: `python3 -m pip install .` exposes the `github-impact-assessment` command. The source-tree command above needs no pip/setuptools.
+Optional installation for launching by module or command from any directory (use a dedicated environment, not the system Python):
+
+```sh
+# Run these setup commands from the repository root:
+python3 -m venv .venv
+.venv/bin/python -m pip install .
+# From any directory, use the installed environment's absolute path:
+/absolute/path/github-impact-assessment/.venv/bin/github-impact-assessment
+# Equivalently:
+/absolute/path/github-impact-assessment/.venv/bin/python -m impact
+```
+
+Installing into `.venv` does not install into a different `python3` on your PATH. The source-tree `run.py` command needs no pip/setuptools and is the recommended dependency-free startup path.
 
 ## Authentication, scope and privacy
 
 - Reuse existing `gh` authentication or an already available environment token. The app does not request, create, broaden, or refresh tokens/organization permissions. Tokens stay server-side, in memory, and are attached **only** to GET requests to `https://api.github.com`. Redirects are rejected. The public Status API receives no credentials.
-- Repository enumeration paginates `GET /user/repos` with owner, collaborator and organization-member affiliations. This is the meaningful enumerable "all accessible repositories" scope, **not all public repositories on GitHub**, and not a guarantee of all repositories your user account can access. Fine-grained token selection, GitHub App identity, organization policy, SSO and permissions can silently hide repositories. Every dashboard snapshot carries this caveat even when pagination is exhausted. This version targets **github.com**, not GHES or `.ghe.com`.
+- Repository discovery paginates `GET /user/repos` with owner, collaborator and organization-member affiliations. This is the meaningful enumerable "all accessible repositories" scope, **not all public repositories on GitHub**, and not a guarantee of all repositories your user account can access. Fine-grained token selection, GitHub App identity, organization policy, SSO and permissions can silently hide repositories. Every dashboard snapshot carries this caveat even when traversal completes. This version targets **github.com**, not GHES or `.ghe.com`.
 - Existing credentials must have access to the relevant repositories. Depending on token type, the probes need read access to metadata, Contents (commit sample), Actions runs/jobs, Checks, Issues, Pull requests and Pages. Missing access produces an explicit unknown/error; do not grant admin or write permissions just to improve this dashboard. Classic PATs/OAuth tokens may have broader scopes than needed; the application still sends GET only.
 - An SSO `partial-results` response marks enumeration partial. A 403 is labeled permission-or-secondary-limit (GitHub does not always distinguish these via headers), and a 404 can mean absent **or hidden**. SSO can also silently hide entire organizations. Authentication failures, service errors and rate limits never count as confirmed impact.
 - No request logs, workflow logs, webhook payloads, private code, repository secrets or raw error response bodies are collected. Evidence is reduced to names, timestamps, status/conclusions, counts and links. Repository names/evidence remain private data: do not expose this port, reverse proxy it, or share its API responses publicly. Any local user/process with access to loopback can read the dashboard; it is not an authenticated multi-user server.
@@ -41,7 +61,7 @@ Optional installation: `python3 -m pip install .` exposes the `github-impact-ass
 
 ## Monitoring and bounded coverage
 
-The first assessment starts immediately; status + inventory are refreshed each cycle, including when there are no incidents. Repository probes run **only** for unresolved incidents with matching live component IDs. No incident is fabricated. A degraded component without a mapped incident is explicitly flagged. Unscoped incidents and newly introduced components are surfaced as gaps instead of guessed from titles.
+The first assessment starts immediately; status is refreshed and repository discovery advances each cycle, including when there are no incidents. Repository probes run **only** for unresolved incidents with matching live component IDs. No incident is fabricated. A degraded component without a mapped incident is explicitly flagged. Unscoped incidents and newly introduced components are surfaced as gaps instead of guessed from titles.
 
 The dashboard offers manual refresh, incident/component cards, per-repository evidence and error reasons, inventory, filtering, sample limits, timestamps, freshness, and in-memory history. It polls the local server every 5 seconds; that does not cause a GitHub poll. Only one assessment runs at a time; overlapping manual requests deduplicate, with a 10-second manual-refresh throttle. Periodic polling is measured **after the previous assessment completes**. Exceptions retain the previous timestamped snapshot with a visible failure/staleness warning.
 
@@ -65,7 +85,17 @@ Enumeration uses pages of 100 until exhausted, denied, timed out, or budget-limi
 
 The deadline prevents new network attempts, not instantaneous interruption of in-flight socket I/O. Shutdown cancels pending starts/backoff and waits briefly for in-flight reads. Offline, permission, API errors and budget exhaustion remain visible as unknown/partial; they never become an all-clear.
 
-Repositories outside a batch rotate into later cycles. Inventory itself restarts each cycle: if your visible inventory exceeds its cap/deadline, increase those limits cautiously or accept that enumeration beyond the cap is not covered. Credential changes or inventory changes can change rotation order. Assessment-row caps can also omit component pairs within a batch; all omitted counts are shown. **A partial cycle and historical samples are not a full-environment audit.** "Bounded cycle complete" means the credential-visible enumeration and scheduled probes finished; it does not mean every service was tested, full account access was verified, or every Actions run/job was scanned.
+### Workaround for large inventories: resumable discovery
+
+Discovery **continues at the next unfinished page** after time/request limits, transient failures, or rate limits rather than restarting at page one. Each polling cycle adds to a bounded, memory-only inventory. Already discovered repositories remain available to rotating incident checks while later pages are fetched. Manual refresh uses the same cursor and respects the same backoff; it does not discard progress.
+
+The coverage panel shows the next page, current-pass count/start time, last unrestricted completion time, and cached entries awaiting revalidation. "Traversal complete" means pagination reached the end; the old "enumeration exhausted" wording did **not** mean API quota exhaustion. Incomplete passes remain visibly partial. A full pass may take multiple polls.
+
+After a pass completes, the next cycle starts a new revalidation pass from page one **without discarding the previous inventory**. Previously cached entries may have changed access; their probes still report errors honestly. Removed repositories are pruned only after an unrestricted traversal completes. An SSO restriction on any page keeps the whole pass partial and prevents pruning based on that restricted view. Changing/removing credentials resets discovery, prior snapshots, history and check rotation; no credential identifier is exposed in the dashboard. Restarting the process also resets the cursor/cache; nothing is persisted to disk.
+
+`IMPACT_MAX_REPOSITORIES` remains a hard capacity limit, not a bypassed safety bound. If reached, discovery keeps its unfinished page and reports `inventory_limit`; restart with a deliberately larger limit (up to 100000) to accommodate the inventory. No default cap, timeout, request budget or permission is silently increased. Old and in-progress generations each stay bounded by that limit; the displayed/checkable union is also capped. GitHub page-number pagination is not an atomic snapshot: additions/removals/renames during a long scan can shift pages. Repeated revalidation and deduplication reduce, but cannot eliminate, that uncertainty or detect silently hidden repositories.
+
+Repositories outside a check batch rotate into later cycles. Credential changes or inventory changes can change rotation order. Assessment-row caps can also omit component pairs within a batch; all omitted counts are shown. **A partial cycle and historical samples are not a full-environment audit.** "Bounded cycle complete" means the credential-visible traversal and scheduled probes finished; it does not mean every service was tested, full account access was verified, or every Actions run/job was scanned.
 
 ## Evidence adapters and interpretation
 
@@ -112,6 +142,7 @@ Browser (local static HTML/CSS/JS; no credentials)
 - `impact/assessment.py`: live component mapping, conservative classifications and evidence projection.
 - `impact/monitor.py`: polling, cancellation, overlap control, rotating batches and snapshots.
 - `impact/app.py` and `impact/static/`: local server and responsive dashboard.
+- `run.py`: file-path launcher that resolves the bundled package independently of the current directory.
 - `impact/demo.py`: network-free incident fixtures.
 
 **No agents, MCP servers, AI models, external databases, hosted services or GitHub Actions workflows are required or created for this application.** All assessment logic is deterministic Python. The only application outbound destinations are GitHub Status and GitHub's REST API (subject to your trusted proxy settings). There are no active checks or monitored-repository mutations. A dashboard refresh is a local scheduling operation, not a GitHub write.
@@ -137,6 +168,7 @@ The offline unittest suite covers all current/future component mapping, no-incid
 
 ## Troubleshooting
 
+- **`No module named impact`:** use `python3 /absolute/path/github-impact-assessment/run.py`, or change into the actual clone root before running `python3 -m impact`. If you installed the package, use that virtual environment's Python/CLI, not another interpreter. Update an older clone with `git pull --ff-only` before using the launcher. Do not copy only `run.py` or `impact/__main__.py` out of the project.
 - **Authentication unknown/401:** confirm your existing `gh auth status --hostname github.com` or environment credential locally; the app re-resolves credentials each cycle. Do not paste token values into issues/logs.
 - **403/404 or missing organization:** check existing SSO authorization/token repository selection and organization policy. The app will not acquire new permissions. A cooldown after 403 is intentional.
 - **Partial coverage:** inspect inventory reason, deferred counts, probe errors and sample limits before making decisions. Increasing a cap does not bypass permission or GitHub rate limits.

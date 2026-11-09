@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from itertools import islice
 from typing import Any
 
-from .client import Client, ProbeError, inventory, repository_path
+from .client import Client, InventoryState, ProbeError, inventory, repository_path
 
 
 def timestamp() -> str:
@@ -215,7 +215,7 @@ def probe(client: Client, repo: dict, component: dict, incident: dict, now: date
     return row
 
 
-def assess(client: Client, offset: int = 0) -> dict:
+def assess(client: Client, offset: int = 0, inventory_state: InventoryState | None = None) -> dict:
     started = timestamp()
     errors = []
     try:
@@ -228,6 +228,7 @@ def assess(client: Client, offset: int = 0) -> dict:
     found = inventory(
         client, deadline=time.monotonic() + client.config.cycle_seconds / 2,
         request_limit=client.config.max_requests // 2 if client.config.max_requests >= 4 else None,
+        state=inventory_state,
     )
     components = status["components"]
     incidents = [item for item in status["incidents"] if item.get("status") not in {"resolved", "postmortem"}]

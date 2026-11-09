@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import sys
 import threading
 import time
@@ -12,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from .assessment import assess, timestamp
-from .client import Backoff, Client, Config, credentials
+from .client import Backoff, Client, Config, InventoryState, credentials
 
 
 class Monitor:
@@ -30,6 +31,8 @@ class Monitor:
         self._next_due = 0.0
         self._offset = 0
         self._backoff = Backoff()
+        self._inventory = InventoryState()
+        self._credential_key: bytes | None = None
         self._latest = None
         self._history: deque = deque(maxlen=10)
         self._error = None
@@ -76,10 +79,18 @@ class Monitor:
                 auth = "Deterministic fixture; no credentials or network" if self.demo else "Injected client"
             else:
                 token, auth = credentials()
+                credential_key = hashlib.sha256(token.encode()).digest() if token else None
+                if credential_key != self._credential_key:
+                    self._inventory = InventoryState()
+                    self._offset = 0
+                    self._credential_key = credential_key
+                    with self._lock:
+                        self._latest = None
+                        self._history.clear()
                 client = Client(token, self.config, self.stop_event, backoff=self._backoff)
             with self._lock:
                 self._auth = auth
-            report = assess(client, self._offset)
+            report = assess(client, self._offset, self._inventory)
             with self._lock:
                 self._offset = report.pop("next_offset")
                 self._latest = report

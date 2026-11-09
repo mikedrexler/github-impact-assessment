@@ -5,7 +5,7 @@ import unittest
 import urllib.error
 from unittest.mock import patch
 
-from impact.client import API_ROOT, STATUS_URL, Backoff, Client, Config, ProbeError, credentials, inventory
+from impact.client import API_ROOT, STATUS_URL, Backoff, Client, Config, InventoryState, ProbeError, credentials, inventory
 
 
 class Response:
@@ -211,6 +211,100 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(result["reason"]["kind"], "inventory_request_limit")
         # The reserved request remains usable by a subsequent probe.
         self.assertLess(client.requests, client.config.max_requests)
+
+    def test_inventory_resumes_across_bounded_cycles_and_then_revalidates(self):
+        state = InventoryState()
+        first_page = [{"full_name": f"example/r{i:03}"} for i in range(100)]
+        first = inventory(self.client(Opener(Response(first_page))), state=state, request_limit=1)
+        self.assertFalse(first["complete"])
+        self.assertEqual(first["next_page"], 2)
+        self.assertEqual(first["scan_discovered"], 100)
+        second_opener = Opener(Response([{"full_name": "example/final"}]))
+        second = inventory(self.client(second_opener), state=state, request_limit=1)
+        self.assertIn("page=2&", second_opener.calls[0][0].full_url)
+        self.assertEqual(second["discovered"], 101)
+        self.assertTrue(second["complete"])
+        self.assertIsNone(second["next_page"])
+        self.assertIsNotNone(second["last_completed_at"])
+        next_opener = Opener(Response([]))
+        third = inventory(self.client(next_opener), state=state)
+        self.assertIn("page=1&", next_opener.calls[0][0].full_url)
+        self.assertTrue(third["complete"])
+        self.assertEqual(third["discovered"], 0)
+
+    def test_deadline_pause_resumes_at_same_page(self):
+        state = InventoryState()
+        inventory(self.client(Opener()), state=state, deadline=0)
+        self.assertEqual(state.next_page, 1)
+        opener = Opener(Response([]))
+        self.assertTrue(inventory(self.client(opener), state=state)["complete"])
+        self.assertIn("page=1&", opener.calls[0][0].full_url)
+
+    def test_error_retries_failed_page_without_losing_progress(self):
+        state = InventoryState()
+        rows = [{"full_name": f"example/r{i}"} for i in range(100)]
+        first = inventory(self.client(Opener(Response(rows), http_error(429))), state=state)
+        self.assertEqual(first["reason"]["kind"], "rate_limit")
+        self.assertEqual(first["next_page"], 2)
+        opener = Opener(Response([rows[0], {"full_name": "example/final"}]))
+        second = inventory(self.client(opener), state=state)
+        self.assertTrue(second["complete"])
+        self.assertEqual(second["discovered"], 101)
+        self.assertIn("page=2&", opener.calls[0][0].full_url)
+
+    def test_cached_inventory_retained_until_complete_refresh(self):
+        state = InventoryState()
+        inventory(self.client(Opener(Response([{"full_name": "example/removed"}]))), state=state)
+        original_completion = state.completed_at
+        rows = [{"full_name": f"example/new{i}"} for i in range(100)]
+        partial = inventory(self.client(Opener(Response(rows))), state=state, request_limit=1)
+        self.assertEqual(partial["discovered"], 101)
+        self.assertEqual(partial["cached_repositories"], 1)
+        self.assertEqual(partial["last_completed_at"], original_completion)
+        self.assertFalse(partial["complete"])
+        complete = inventory(self.client(Opener(Response([]))), state=state)
+        self.assertEqual(complete["discovered"], 100)
+        self.assertFalse(any(repo["name"] == "example/removed" for repo in complete["repositories"]))
+        self.assertEqual(complete["cached_repositories"], 0)
+
+    def test_sso_restriction_remembered_across_resume_and_does_not_prune(self):
+        state = InventoryState()
+        inventory(self.client(Opener(Response([{"full_name": "example/previous"}]))), state=state)
+        previous_completion = state.completed_at
+        rows = [{"full_name": f"example/new{i}"} for i in range(100)]
+        partial = inventory(self.client(Opener(Response(rows, {"X-GitHub-SSO": "partial-results"}))),
+                            state=state, request_limit=1)
+        self.assertFalse(partial["complete"])
+        end = inventory(self.client(Opener(Response([]))), state=state)
+        self.assertFalse(end["complete"])
+        self.assertEqual(end["reason"]["kind"], "sso_partial_results")
+        self.assertEqual(end["last_completed_at"], previous_completion)
+        self.assertTrue(any(repo["name"] == "example/previous" for repo in end["repositories"]))
+        self.assertIsNone(end["next_page"])
+        next_pass = inventory(self.client(Opener()), state=state, deadline=0)
+        self.assertEqual(next_pass["discovered"], 101)
+        self.assertEqual(next_pass["cached_repositories"], 101)
+        self.assertEqual(next_pass["last_completed_at"], previous_completion)
+
+    def test_capacity_limit_does_not_skip_page_tail(self):
+        state = InventoryState()
+        rows = [{"full_name": f"example/r{i}"} for i in range(100)]
+        partial = inventory(self.client(Opener(Response(rows)), max_repositories=50), state=state)
+        self.assertEqual(partial["discovered"], 50)
+        self.assertEqual(partial["reason"]["kind"], "inventory_limit")
+        self.assertEqual(partial["next_page"], 1)
+        opener = Opener(Response(rows), Response([]))
+        complete = inventory(self.client(opener, max_repositories=200), state=state)
+        self.assertEqual(complete["discovered"], 100)
+        self.assertTrue(complete["complete"])
+        self.assertIn("page=1&", opener.calls[0][0].full_url)
+
+    def test_malformed_page_does_not_commit_or_advance(self):
+        state = InventoryState()
+        bad = inventory(self.client(Opener(Response([{"full_name": "example/valid"}, None]))), state=state)
+        self.assertFalse(bad["complete"])
+        self.assertEqual(bad["discovered"], 0)
+        self.assertEqual(bad["next_page"], 1)
 
     def test_sso_partial_header_is_not_a_complete_inventory(self):
         response = Response([{"full_name": "example/visible"}], {
