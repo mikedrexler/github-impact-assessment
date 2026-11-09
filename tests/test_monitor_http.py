@@ -90,6 +90,58 @@ class MonitorTests(unittest.TestCase):
         self.assertNotIn("sentinel-private-token", json.dumps(monitor.snapshot()))
         self.assertEqual(monitor.snapshot()["authentication"], "environment")
 
+    @patch("impact.monitor.credentials")
+    @patch("impact.monitor.Client")
+    def test_credential_changes_reset_inventory_history_and_rotation(self, client, credentials):
+        credentials.side_effect = [
+            ("first-private-token", "environment"), ("first-private-token", "environment"),
+            ("second-private-token", "environment"), (None, "No credential"),
+        ]
+        client.side_effect = lambda *args, **kwargs: DemoClient(Config(), threading.Event())
+        monitor = Monitor(Config())
+        monitor._cycle()
+        original = monitor._inventory
+        monitor._cycle()
+        self.assertIs(monitor._inventory, original)
+        self.assertEqual(len(monitor.snapshot()["history"]), 2)
+        monitor._offset = 123
+        monitor._cycle()
+        self.assertIsNot(monitor._inventory, original)
+        self.assertEqual(len(monitor.snapshot()["history"]), 1)
+        changed = monitor._inventory
+        monitor._cycle()
+        self.assertIsNot(monitor._inventory, changed)
+        public = json.dumps(monitor.snapshot())
+        self.assertNotIn("first-private-token", public)
+        self.assertNotIn("second-private-token", public)
+
+    def test_monitor_uses_saved_cursor_on_following_cycle(self):
+        class PagedDemo(DemoClient):
+            def get(self, path):
+                if path.startswith("/user/repos?"):
+                    self.requests += 1
+                    if "page=1&" in path:
+                        return [{"full_name": f"example/r{i}"} for i in range(100)]
+                    self.page_two = True
+                    return []
+                return super().get(path)
+
+        clients = []
+
+        def factory(config, stop):
+            client = PagedDemo(config, stop)
+            clients.append(client)
+            return client
+
+        monitor = Monitor(Config(max_requests=4, max_check_repositories=1), client_factory=factory)
+        monitor._cycle()
+        self.assertEqual(monitor.snapshot()["latest"]["inventory"]["next_page"], 2)
+        monitor._cycle()
+        result = monitor.snapshot()["latest"]["inventory"]
+        self.assertTrue(clients[1].page_two)
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["discovered"], 100)
+
 
 class HttpTests(unittest.TestCase):
     def setUp(self):

@@ -10,7 +10,8 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 STATUS_URL = "https://www.githubstatus.com/api/v2/summary.json"
@@ -214,50 +215,93 @@ def repository_path(name: str) -> str:
     return "/repos/" + name
 
 
-def inventory(client: Client, *, deadline: float | None = None, request_limit: int | None = None) -> dict:
-    repositories: list[dict] = []
-    seen: set[str] = set()
-    page = 1
+@dataclass
+class InventoryState:
+    """Single-monitor, memory-only cursor and last completed inventory."""
+
+    repositories: dict[str, dict] = field(default_factory=dict)
+    pending: dict[str, dict] = field(default_factory=dict)
+    next_page: int = 1
+    scanning: bool = False
+    started_at: str | None = None
+    completed_at: str | None = None
+    sso_partial: bool = False
+
+
+def inventory(
+    client: Client, *, deadline: float | None = None,
+    request_limit: int | None = None, state: InventoryState | None = None,
+) -> dict:
+    state = state if state is not None else InventoryState()
+    if not state.scanning:
+        state.pending = {}
+        state.next_page = 1
+        state.scanning = True
+        state.started_at = datetime.now(timezone.utc).isoformat()
+        state.sso_partial = False
     reason = None
     while True:
         try:
             if deadline is not None and time.monotonic() >= deadline:
-                raise ProbeError("inventory_deadline", "Inventory phase time budget exhausted; remaining cycle reserved for incident probes")
+                raise ProbeError("inventory_deadline", "Discovery paused at its time budget; resumes from the saved page next cycle")
             if request_limit is not None and client.requests >= request_limit:
-                raise ProbeError("inventory_request_limit", "Inventory phase request budget exhausted; remaining requests reserved for incident probes")
+                raise ProbeError("inventory_request_limit", "Discovery paused at its request budget; resumes from the saved page next cycle")
             rows = client.get(
-                f"/user/repos?per_page=100&page={page}&affiliation=owner,collaborator,organization_member&sort=full_name&direction=asc"
+                f"/user/repos?per_page=100&page={state.next_page}&affiliation=owner,collaborator,organization_member&sort=full_name&direction=asc"
             )
             if not isinstance(rows, list):
                 raise ProbeError("invalid_response", "Repository enumeration was not a list")
+            page_repositories = {}
             for row in rows:
                 if not isinstance(row, dict) or not isinstance(row.get("full_name"), str):
                     raise ProbeError("invalid_response", "Invalid repository in enumeration")
                 name = row["full_name"]
                 repository_path(name)
-                if name in seen:
-                    continue
-                if len(repositories) >= client.config.max_repositories:
-                    reason = {"kind": "inventory_limit", "message": "Configured repository inventory limit reached"}
-                    break
-                seen.add(name)
-                repositories.append({
+                page_repositories[name] = {
                     "name": name, "url": f"https://github.com/{name}",
                     "archived": bool(row.get("archived")),
                     "has_issues": row.get("has_issues") if isinstance(row.get("has_issues"), bool) else None,
                     "has_pages": row.get("has_pages") if isinstance(row.get("has_pages"), bool) else None,
-                })
-            if reason or len(rows) < 100:
+                }
+            state.sso_partial |= bool(getattr(client, "access_warnings", set()))
+            for name, repository in page_repositories.items():
+                if name not in state.pending and len(state.pending) >= client.config.max_repositories:
+                    reason = {"kind": "inventory_limit", "message": "Configured repository inventory limit reached"}
+                    break
+                state.pending[name] = repository
+            if reason:
+                # Retry this page after a capacity increase; never skip its tail.
                 break
-            page += 1
+            state.next_page += 1
+            if len(rows) < 100:
+                if state.sso_partial:
+                    # Do not prune an older inventory from a restricted traversal.
+                    reason = {"kind": "sso_partial_results", "message": "SSO restrictions reported by GitHub; enumeration is partial"}
+                    combined = {**state.repositories, **state.pending}
+                    state.repositories = dict(list(combined.items())[:client.config.max_repositories])
+                else:
+                    state.repositories = state.pending
+                    state.completed_at = datetime.now(timezone.utc).isoformat()
+                state.scanning = False
+                break
         except ProbeError as error:
             reason = {"kind": error.kind, "message": error.message}
             break
-    if reason is None and getattr(client, "access_warnings", set()):
-        reason = {"kind": "sso_partial_results", "message": "SSO restrictions reported by GitHub; enumeration is partial"}
+    # Keep previously discovered repositories usable while revalidation proceeds,
+    # but prune removed entries only after an unrestricted traversal completes.
+    combined = {**state.repositories, **state.pending}
+    repositories = sorted(combined.values(), key=lambda repo: repo["name"].casefold())
+    # Old and pending generations can differ; bound the exposed inventory too.
+    if len(repositories) > client.config.max_repositories:
+        repositories = repositories[:client.config.max_repositories]
+        reason = reason or {"kind": "inventory_limit", "message": "Combined cached inventory exceeds configured capacity"}
     return {
         "repositories": repositories, "complete": reason is None, "reason": reason,
         "discovered": len(repositories),
+        "next_page": state.next_page if state.scanning else None,
+        "scan_started_at": state.started_at, "last_completed_at": state.completed_at,
+        "scan_discovered": len(state.pending),
+        "cached_repositories": sum(repo["name"] not in state.pending for repo in repositories),
         "scope": "Credential-visible owned, collaborator and organization-member repositories. Invisible/SSO-restricted repositories and unrelated public repositories are not enumerable here.",
-        "access_caveat": "Enumeration exhausted is not proof of full account access: token selection, SSO and permissions can silently hide repositories.",
+        "access_caveat": "Discovery completion is not proof of full account access: token selection, SSO and permissions can silently hide repositories. Cached entries may have changed access.",
     }

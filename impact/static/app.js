@@ -87,7 +87,15 @@ function render() {
   const statusText = report ? report.status_description : "First assessment in progress; larger inventories may take up to the configured cycle budget.";
   $("notice").textContent = [...warnings, statusText].join(" ");
   $("notice").className = warnings.length ? "warning" : "";
-  if (!report) return;
+  if (!report) {
+    for (const id of ["summary", "incidents", "components", "coverage", "checks", "inventory", "history"]) {
+      $(id).replaceChildren();
+    }
+    $("inventory-title").textContent = "Inventory pending";
+    $("check-count").textContent = "";
+    $("more").hidden = true;
+    return;
+  }
   $("summary").replaceChildren();
   for (const [label, value] of [
     ["Unresolved incidents", report.incidents.length],
@@ -117,7 +125,8 @@ function render() {
     $("components").append(card);
   }
   $("coverage").replaceChildren();
-  paragraph($("coverage"), `Inventory pagination: ${report.inventory.complete ? "exhausted for credential-visible scope" : "PARTIAL"}. ${report.inventory.discovered} discovered; ${report.coverage.repositories_selected} selected for this incident cycle; ${report.coverage.repositories_deferred} repositories / ${report.coverage.assessments_deferred} assessments deferred; ${report.coverage.check_errors} probe errors.`);
+  paragraph($("coverage"), `Repository discovery: ${report.inventory.complete ? "traversal complete for credential-visible scope" : "IN PROGRESS / PARTIAL"}. ${report.inventory.discovered} known; ${report.coverage.repositories_selected} selected for this incident cycle; ${report.coverage.repositories_deferred} repositories / ${report.coverage.assessments_deferred} assessments deferred; ${report.coverage.check_errors} probe errors.`);
+  paragraph($("coverage"), `${report.inventory.next_page ? `Next discovery page: ${report.inventory.next_page}; progress resumes automatically next cycle.` : "Discovery pass reached its end; next cycle revalidates from page 1."} Current pass: ${report.inventory.scan_discovered} discovered, started ${date(report.inventory.scan_started_at)}. Last unrestricted pass completed: ${date(report.inventory.last_completed_at)}. ${report.inventory.cached_repositories} cached entries awaiting revalidation.`, "muted");
   paragraph($("coverage"), report.inventory.scope);
   paragraph($("coverage"), report.inventory.access_caveat, "error");
   if (report.inventory.reason) paragraph($("coverage"), `${report.inventory.reason.kind}: ${report.inventory.reason.message}`, "error");
@@ -125,7 +134,7 @@ function render() {
   paragraph($("coverage"), `${report.coverage.complete ? "Bounded cycle complete" : "PARTIAL / limited coverage"}. ${report.coverage.note}`);
   paragraph($("coverage"), `Snapshot ${date(report.completed_at)} (${Math.floor(age)}s ago); cycle started ${date(report.started_at)}. Status feed updated ${date(report.status_updated_at)}. Next poll ${state.busy ? "after current assessment" : date(state.next_poll_at)}.`);
   paragraph($("coverage"), `Authentication: ${state.authentication}. Requests used ${report.requests_used}/${state.config.max_requests}; interval ${state.config.poll_seconds}s; cycle budget ${state.config.cycle_seconds}s; concurrency ${state.config.workers}. No adapter currently emits confirmed impact; no "unaffected" classification.`, "muted");
-  $("inventory-title").textContent = `${report.inventory.discovered} repositories (${report.inventory.complete ? "credential-visible pagination exhausted" : "partial inventory"})`;
+  $("inventory-title").textContent = `${report.inventory.discovered} repositories (${report.inventory.complete ? "credential-visible discovery complete" : "resumable discovery / partial inventory"})`;
   $("inventory").replaceChildren(...report.inventory.repositories.map((repo) => link(repo.name + (repo.archived ? " (archived)" : ""), repo.url)));
   $("history").replaceChildren();
   for (const item of state.history) {
