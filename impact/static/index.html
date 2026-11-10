@@ -22,19 +22,22 @@
     <div id="notice" role="status" aria-live="polite">Connecting to local monitor...</div>
     <div id="configuration-panel" aria-labelledby="configuration-tab" hidden>
     <h2 class="page-heading">Configuration</h2>
-    <section class="panel" aria-labelledby="account-discovery-title">
-      <h2 id="account-discovery-title">Account-wide discovery</h2>
-      <p>Discover repositories visible to your credentials across organizations to enable the repository dropdown below. Discovery is optional if you enter exact owner/repo names instead.</p>
-      <button type="button" id="all-repositories">Discover all accessible repositories</button>
-      <p class="muted">This enables account-wide discovery and assessment. Apply a selected repository list below afterward to restrict ongoing checks.</p>
-    </section>
     <section class="panel" aria-labelledby="repository-selection-title">
       <h2 id="repository-selection-title">Repositories to assess</h2>
       <p>Preselect exact repositories without crawling your organizations. Only selected repositories are validated and assessed; all existing access and read-only safeguards still apply.</p>
       <form id="repository-selection">
-        <label for="assessed-repository">Add repository to assess</label>
-        <select id="assessed-repository" aria-describedby="assessed-repository-help" disabled><option value="">Run account-wide discovery first</option></select>
-        <p id="assessed-repository-help" class="muted">Run Account-wide discovery above to enable this dropdown. You can still enter exact owner/repo names below without any account-wide crawl.</p>
+        <fieldset class="repository-picker">
+          <legend>Discover and add repositories</legend>
+          <div class="repository-picker-controls">
+            <button type="button" id="all-repositories">Discover all accessible repositories</button>
+            <div class="repository-picker-select">
+              <label for="assessed-repository">Add repository to assess</label>
+              <select id="assessed-repository" aria-describedby="assessed-repository-help discovery-scope-help" disabled><option value="">Run account-wide discovery first</option></select>
+            </div>
+          </div>
+          <p id="assessed-repository-help" class="muted">Use Discover all accessible repositories to enable this dropdown, or enter exact owner/repo names below without an account-wide crawl.</p>
+          <p id="discovery-scope-help" class="muted">Discovery enables account-wide discovery and assessment. Choosing a repository adds it to your draft; apply the selected list below to restrict ongoing checks.</p>
+        </fieldset>
         <label for="repository-names">Selected repositories (one <code>owner/repo</code> per line, or comma-separated; remove a name to exclude it)</label>
         <textarea id="repository-names" rows="4" spellcheck="false" placeholder="my-org/service-api&#10;my-org/web-app" aria-describedby="selection-help"></textarea>
         <p id="selection-help" class="muted">Selection is kept on this server until restart, not in browser storage. Use --repos owner/repo at startup to preselect before any discovery.</p>

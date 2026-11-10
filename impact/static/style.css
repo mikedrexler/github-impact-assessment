@@ -7,3 +7,4 @@ textarea{display:block;width:100%;margin:10px 0;font:inherit;border:1px solid va
 @media(max-width:850px){.grid{grid-template-columns:repeat(2,1fr)}.summary{grid-template-columns:repeat(2,1fr)}header,.section-title{align-items:flex-start;flex-direction:column}#inventory{columns:2}}
 @media(max-width:500px){header,main,footer{padding:20px 16px}.grid{grid-template-columns:1fr}h1{font-size:25px}#inventory{columns:1}}
 select:disabled{color:var(--muted);background:#21262d;cursor:not-allowed}
+.repository-picker{min-width:0;margin:0 0 18px;padding:12px 14px;border:1px solid var(--line);border-radius:6px}.repository-picker legend{padding:0 6px;font-weight:600}.repository-picker-controls{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap}.repository-picker-select{display:flex;flex-direction:column;gap:5px;max-width:100%}.repository-picker p{font-size:13px;margin:10px 0 0}

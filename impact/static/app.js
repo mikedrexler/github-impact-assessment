@@ -46,7 +46,7 @@ function renderAssessedRepositoryDropdown() {
   dropdown.disabled = !optedIn || !repositories.length || selectionSaving || Boolean(state?.stopped);
   $("assessed-repository-help").textContent = optedIn
     ? "Choose an available repository, then click Assess selected repositories. Discovery may still be partial; names can also be entered below."
-    : "Run Account-wide discovery above to enable this dropdown. You can still enter exact owner/repo names below without an account-wide crawl.";
+    : "Use Discover all accessible repositories to enable this dropdown, or enter exact owner/repo names below without an account-wide crawl.";
 }
 function renderCopilotProbe() {
   const probe = state?.copilot_probe;
