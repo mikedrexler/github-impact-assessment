@@ -36,11 +36,13 @@ class DemoClient:
 
     def get(self, path: str):
         self.requests += 1
-        fixtures = {
+        fixtures: dict[str, dict] = {
             "example/queue-symptom": {"has_issues": True, "has_pages": True},
             "example/self-hosted": {"has_issues": True, "has_pages": False},
             "example/limited-access": {"has_issues": False, "has_pages": False},
         }
+        for metadata in fixtures.values():
+            metadata["permissions"] = {"push": True}
         if path.startswith("/repos/") and path.removeprefix("/repos/") in fixtures:
             name = path.removeprefix("/repos/")
             return {"full_name": name, **fixtures[name]}
