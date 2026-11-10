@@ -14,6 +14,7 @@ from .client import Client, InventoryState, ProbeError, inventory, repository_pa
 
 if TYPE_CHECKING:
     from .agent import Agent
+    from .copilot_probe import CopilotProbe
 
 
 class ReadClient(Protocol):
@@ -41,7 +42,7 @@ def adapter_for(name: str) -> str:
         "webhooks": "webhooks", "pull requests": "pull_requests",
         "issues": "issues", "pages": "pages", "packages": "packages",
         "codespaces": "codespaces", "copilot": "copilot",
-        "copilot ai model providers": "copilot", "github copilot": "copilot",
+        "copilot ai model providers": "copilot_model", "github copilot": "copilot",
     }.get(name.casefold().strip(), "unsupported")
 
 
@@ -56,6 +57,7 @@ LIMITATIONS = {
     "packages": "No uniform repository-scoped read-only probe establishes package pull/push health.",
     "codespaces": "No codespace lifecycle operation. Repository metadata cannot establish Codespaces health.",
     "copilot": "No meaningful tenant-level read-only inference/IDE/model-provider probe; licensing or API connectivity would not establish health.",
+    "copilot_model": "Optional manual active Copilot inference only. Shared client/model-path evidence, not a repository or IDE test. No confirmed impact or unaffected claim.",
     "unsupported": "Unrecognized/informational live Status component: no supported read-only evidence adapter.",
 }
 
@@ -173,7 +175,8 @@ def actions(client: ReadClient, repo: dict, incident: dict, row: dict, now: date
     )
 
 
-def probe(client: ReadClient, repo: dict, component: dict, incident: dict, now: datetime) -> dict:
+def probe(client: ReadClient, repo: dict, component: dict, incident: dict, now: datetime,
+          copilot_evidence: dict | None = None) -> dict:
     adapter = adapter_for(component["name"])
     row = {
         "repository": repo["name"], "repository_url": repo["url"],
@@ -183,6 +186,35 @@ def probe(client: ReadClient, repo: dict, component: dict, incident: dict, now: 
         "evidence": [], "limitations": LIMITATIONS[adapter],
         "checked_at": None, "adapter": adapter, "error_kind": None,
     }
+    if adapter == "copilot_model":
+        from .copilot_probe import FRESH_SECONDS, LIMITATION
+
+        state = copilot_evidence or {"configuration": "disabled", "status": "disabled"}
+        sample = state.get("sample")
+        row["limitations"] = LIMITATION
+        row["reason"] = f"No matching active Copilot inference sample; configuration {state['configuration']}, last request {state['status']}. Repository impact unknown."
+        if sample and incident["id"] in sample["incident_ids"]:
+            at = parsed(sample["checked_at"])
+            start = incident_start(incident)
+            fresh = bool(at and start and start <= at <= now and (now - at).total_seconds() <= FRESH_SECONDS)
+            outcome = sample["outcome"]
+            row["checked_at"] = sample["checked_at"]
+            row["evidence"].append({
+                "summary": f"Shared active Copilot SDK sample: {outcome}; requested model {sample['requested_model']}; "
+                f"actual served model not independently verified; {sample['latency_ms']} ms; sampled {sample['checked_at']}. "
+                + ("Incident-time sample, at most 5 minutes old. " if fresh else "STALE or outside incident window; not current evidence. ")
+                + "Same sample reused across selected repositories, not separate repository tests.",
+            })
+            row["reason"] = (
+                "Configured Copilot client-path inference succeeded at the sampled instant; repository impact remains unknown."
+                if fresh and outcome == "success" else
+                "Active inference did not establish current model-path health; provider attribution and repository impact remain unknown."
+            )
+            if outcome != "success":
+                row["error_kind"] = outcome
+        else:
+            row["checked_at"] = timestamp()
+        return row
     if adapter in {"unsupported", "webhooks", "packages", "codespaces", "copilot"}:
         row["checked_at"] = timestamp()
         return row
@@ -226,6 +258,7 @@ def probe(client: ReadClient, repo: dict, component: dict, incident: dict, now: 
 def assess(
     client: Client, offset: int = 0, inventory_state: InventoryState | None = None,
     *, inventory_report: dict | None = None, agent: Agent | None = None,
+    copilot_probe: CopilotProbe | None = None, run_copilot: bool = False,
 ) -> dict:
     from .agent import MAX_CONTEXTS, Agent, ProbeContext
 
@@ -277,6 +310,15 @@ def assess(
     ))
     selected_count = len({repo["name"] for repo, _, _ in tasks})
 
+    copilot_incidents = sorted({incident["id"] for _, component, incident in tasks
+                               if adapter_for(component["name"]) == "copilot_model"})
+    if run_copilot and copilot_probe:
+        if copilot_incidents and not getattr(client, "stop", threading.Event()).is_set():
+            copilot_probe.run(copilot_incidents)
+        else:
+            copilot_probe.skip()
+    copilot_evidence = copilot_probe.snapshot() if copilot_probe else None
+    now = datetime.now(timezone.utc)
     contexts = [ProbeContext(client, repo, component, incident, now)
                 for repo, component, incident in tasks[:MAX_CONTEXTS]]
     agent_report = (agent or Agent()).run(contexts, getattr(client, "stop", threading.Event()))
@@ -285,7 +327,7 @@ def assess(
         index, task = indexed_task
         repo, component, incident = task
         reader = contexts[index] if index < len(contexts) else client
-        return probe(reader, repo, component, incident, now)
+        return probe(reader, repo, component, incident, now, copilot_evidence)
 
     with ThreadPoolExecutor(max_workers=client.config.workers) as pool:
         rows = list(pool.map(check, enumerate(tasks)))

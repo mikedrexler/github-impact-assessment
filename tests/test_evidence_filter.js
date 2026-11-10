@@ -37,6 +37,7 @@ function dashboard(checks = []) {
     fetch: () => new Promise(() => {}),
     setInterval: () => {},
   });
+  vm.runInContext(readFileSync(join(__dirname, "../impact/static/ui.js"), "utf8"), context);
   vm.runInContext(readFileSync(join(__dirname, "../impact/static/app.js"), "utf8"), context);
   context.testRows = checks;
   vm.runInContext("state = {latest: {checks: testRows, incidents: [{}]}}; renderChecks();", context);
@@ -128,7 +129,7 @@ test("repository option labels are plain text, never HTML", () => {
 
 test("assessed repository dropdown uses known scope without requiring incident evidence", () => {
   const app = dashboard();
-  app.run(`state.selection = {repositories: ["org/a"], pending: null, limit: 200};
+  app.run(`state.selection = {repositories: ["org/a"], pending: null, limit: 200, discovery_opted_in: true};
     state.discovery = {latest: {repositories: [{name:"org/a"}, {name:"org/b"}]}};
     renderSelection();`);
   assert.deepEqual(app.element("assessed-repository").options.map(option => option.value), ["", "org/a", "org/b"]);
@@ -144,7 +145,7 @@ test("assessed repository dropdown uses known scope without requiring incident e
 
 test("assessed dropdown avoids duplicates and supports manually entered repository names", () => {
   const app = dashboard();
-  app.run('state.selection = {repositories: [], pending: null, limit: 200}; renderSelection();');
+  app.run('state.selection = {repositories: [], pending: null, limit: 200, discovery_opted_in: true}; renderSelection();');
   assert.equal(app.element("assessed-repository").disabled, true);
   app.element("repository-names").value = "Org/Repo";
   app.element("repository-names").events.input();
@@ -155,6 +156,52 @@ test("assessed dropdown avoids duplicates and supports manually entered reposito
   assert.equal(app.element("repository-names").value, "Org/Repo");
   app.run("selectionSaving = true; renderAssessedRepositoryDropdown();");
   assert.equal(app.element("assessed-repository").disabled, true);
+});
+
+test("dropdown stays greyed out before discovery even with known and manually entered repositories", () => {
+  const app = dashboard();
+  app.run(`state.selection = {repositories: ["org/a"], pending: null, limit: 200, discovery_opted_in: false};
+    state.discovery = {latest: {repositories: [{name:"org/a"}, {name:"org/b"}]}};
+    renderSelection();`);
+  assert.equal(app.element("assessed-repository").disabled, true);
+  assert.match(app.element("assessed-repository").options[0].textContent, /discovery first/);
+  app.element("assessed-repository").value = "org/b";
+  app.element("assessed-repository").events.change();
+  assert.equal(app.element("repository-names").value, "org/a");
+  app.run("state.selection.discovery_opted_in = true; renderSelection();");
+  assert.equal(app.element("assessed-repository").disabled, false);
+  app.element("assessed-repository").value = "org/b";
+  app.element("assessed-repository").events.change();
+  assert.equal(app.element("repository-names").value, "org/a\norg/b");
+});
+
+test("navigation puts Configuration after Past Incidents on both pages and discovery above repository selection", () => {
+  for (const file of ["index.html", "past-incidents.html"]) {
+    const html = readFileSync(join(__dirname, "../impact/static", file), "utf8");
+    const nav = html.match(/<nav[\s\S]*?<\/nav>/)[0];
+    assert.ok(nav.indexOf("Live Assessment") < nav.indexOf("Past Incidents"));
+    assert.ok(nav.indexOf("Past Incidents") < nav.indexOf("Configuration"));
+  }
+  const html = readFileSync(join(__dirname, "../impact/static/index.html"), "utf8");
+  assert.ok(html.indexOf('id="all-repositories"') < html.indexOf('id="assessed-repository"'));
+  assert.match(html, /<select id="assessed-repository"[^>]* disabled>/);
+});
+
+test("active inference control requires configuration and scoped incident and labels stale shared samples", () => {
+  const app = dashboard();
+  app.run("renderCopilotProbe();");
+  assert.equal(app.element("copilot-probe").disabled, true);
+  app.run(`state.copilot_probe = {configuration: "ready", status:"idle", requested_model:"fixture-model"};
+    renderCopilotProbe();`);
+  assert.equal(app.element("copilot-probe").disabled, true);
+  app.run(`state.latest.checks = [{adapter:"copilot_model"}]; renderCopilotProbe();`);
+  assert.equal(app.element("copilot-probe").disabled, false);
+  app.run(`state.busy = true; renderCopilotProbe();`);
+  assert.equal(app.element("copilot-probe").disabled, true);
+  app.run(`state.busy = false; state.copilot_probe.sample = {
+    outcome:"success", latency_ms:20, checked_at:"2020-01-01T00:00:00Z"}; renderCopilotProbe();`);
+  assert.match(app.element("copilot-probe-status").textContent, /STALE/);
+  assert.match(app.element("copilot-probe-status").textContent, /not independently verified/);
 });
 
 test("configuration navigation isolates repository controls and preserves draft state", () => {

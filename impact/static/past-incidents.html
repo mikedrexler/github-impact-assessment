@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Past Incidents - GitHub Impact Assessment</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/ui.js" defer></script>
+  <script src="/past.js" defer></script>
+</head>
+<body>
+  <header><div><p class="eyebrow">LOCAL / READ-ONLY / EVIDENCE-LED</p><h1>Past Incidents</h1></div></header>
+  <main>
+    <nav class="page-tabs" aria-label="Main navigation"><a href="/#dashboard">Live Assessment</a> <a href="/past-incidents" aria-current="page">Past Incidents</a> <a href="/#configuration">Configuration</a></nav>
+    <div id="notice" role="status" aria-live="polite">Loading incident history...</div>
+    <p class="principle">Public incident history is not proof of tenant impact. Recorded environment evidence is collected only while this monitor observes an unresolved incident. <strong>No recorded evidence does not mean unaffected.</strong></p>
+    <div class="section-title"><h2>By incident date, newest first</h2><label>Filter <input id="filter" type="search" placeholder="Incident, component or date"></label></div>
+    <p class="muted" id="scope"></p>
+    <p class="muted" id="count"></p>
+    <div id="past-incidents"></div>
+  </main>
+  <footer>Times use your browser's local timezone. Public history is bounded; environment evidence is memory-only and clears on restart or credential change. No historical health guarantee.</footer>
+</body>
+</html>

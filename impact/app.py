@@ -18,6 +18,9 @@ ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
+    "/past-incidents": ("past-incidents.html", "text/html; charset=utf-8"),
+    "/past.js": ("past.js", "text/javascript; charset=utf-8"),
+    "/ui.js": ("ui.js", "text/javascript; charset=utf-8"),
 }
 
 
@@ -71,6 +74,8 @@ def handler_for(monitor: Monitor):
                 return self._json(403, {"error": "Only same-origin loopback access is allowed"})
             if self.path == "/api/state":
                 return self._json(200, monitor.snapshot())
+            if self.path == "/api/past-incidents":
+                return self._json(200, monitor.past_snapshot())
             if self.path in ASSETS:
                 name, content_type = ASSETS[self.path]
                 return self._reply(200, files("impact").joinpath("static", name).read_bytes(), content_type)
@@ -98,11 +103,11 @@ def handler_for(monitor: Monitor):
                 except (OSError, TimeoutError):
                     return self._json(408, {"error": "Repository selection body timed out"})
                 return self._json(202 if status == "accepted" else 200 if status == "unchanged" else 409, {"status": status})
-            if self.path != "/api/refresh":
+            if self.path not in {"/api/refresh", "/api/copilot-probe"}:
                 return self._json(404, {"error": "Not found"})
             if self.headers.get("Transfer-Encoding") or self.headers.get("Content-Length", "0") != "0":
-                return self._json(400, {"error": "Refresh accepts no request body"})
-            status = monitor.refresh()
+                return self._json(400, {"error": "This operation accepts no request body"})
+            status = monitor.request_copilot_probe() if self.path == "/api/copilot-probe" else monitor.refresh()
             return self._json(202 if status == "accepted" else 409, {"status": status})
 
     return Handler

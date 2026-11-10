@@ -6,34 +6,8 @@ let actionMessage = "";
 let selectionDirty = false;
 let selectionSaving = false;
 let selectionMessage = "";
-const $ = (id) => document.getElementById(id);
-function node(tag, text, cls) {
-  const element = document.createElement(tag);
-  if (text !== undefined) element.textContent = String(text);
-  if (cls) element.className = cls;
-  return element;
-}
-function link(text, url) {
-  const element = node("a", text);
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol === "https:" && ["github.com", "www.githubstatus.com"].includes(parsed.hostname) && !parsed.username && !parsed.password) {
-      element.href = parsed.href;
-      element.target = "_blank";
-      element.rel = "noreferrer";
-    }
-  } catch { /* Invalid evidence links remain plain text. */ }
-  return element;
-}
-function date(value) {
-  const parsed = new Date(value);
-  return value && !Number.isNaN(parsed.valueOf()) ? parsed.toLocaleString() : "unknown";
-}
-function badge(value) {
-  const allowed = ["confirmed", "suspected", "unknown", "not-applicable", "operational", "degraded_performance", "partial_outage", "major_outage"];
-  return node("span", value.replaceAll("_", " "), `badge ${allowed.includes(value) ? value : "unknown"}`);
-}
-function paragraph(parent, text, cls) { parent.append(node("p", text, cls)); }
+let copilotMessage = "";
+let copilotSubmitting = false;
 function renderPage() {
   const configuration = window.location.hash === "#configuration";
   $("configuration-panel").hidden = !configuration;
@@ -48,6 +22,7 @@ function selectedRepositoryNames() {
 }
 function renderAssessedRepositoryDropdown() {
   const dropdown = $("assessed-repository");
+  const optedIn = Boolean(state?.selection?.discovery_opted_in);
   const known = state?.discovery?.latest?.repositories || state?.latest?.inventory?.repositories || [];
   const names = new Map();
   for (const name of [
@@ -57,16 +32,37 @@ function renderAssessedRepositoryDropdown() {
     names.set(name.toLowerCase(), name);
   }
   const repositories = [...names.values()].sort((a, b) => a.localeCompare(b));
+  const placeholder = !optedIn ? "Run account-wide discovery first"
+    : repositories.length ? "Choose a repository..." : "Discovery in progress or no repositories available";
   const values = ["", ...repositories];
-  if (JSON.stringify([...dropdown.options].map((option) => option.value)) !== JSON.stringify(values)) {
+  if (dropdown.options[0]?.textContent !== placeholder || JSON.stringify([...dropdown.options].map((option) => option.value)) !== JSON.stringify(values)) {
     dropdown.replaceChildren(...values.map((name) => {
-      const option = node("option", name || (repositories.length ? "Choose a repository..." : "Enter an owner/repo below to begin"));
+      const option = node("option", name || placeholder);
       option.value = name;
       return option;
     }));
     dropdown.value = "";
   }
-  dropdown.disabled = !repositories.length || selectionSaving || Boolean(state?.stopped);
+  dropdown.disabled = !optedIn || !repositories.length || selectionSaving || Boolean(state?.stopped);
+  $("assessed-repository-help").textContent = optedIn
+    ? "Choose an available repository, then click Assess selected repositories. Discovery may still be partial; names can also be entered below."
+    : "Run Account-wide discovery above to enable this dropdown. You can still enter exact owner/repo names below without an account-wide crawl.";
+}
+function renderCopilotProbe() {
+  const probe = state?.copilot_probe;
+  const scoped = (state?.latest?.checks || []).some(row => row.adapter === "copilot_model");
+  $("copilot-probe").disabled = !probe || probe.configuration !== "ready" || !scoped
+    || state.busy || state.refresh_pending || state.stopped || state.demo
+    || Boolean(state.selection?.pending) || copilotSubmitting;
+  const sample = probe?.sample;
+  const age = sample ? (Date.now() - new Date(sample.checked_at)) / 1000 : Infinity;
+  $("copilot-probe-status").textContent = [
+    `Configuration: ${probe?.configuration || "disabled"}. Last request: ${probe?.status || "not run"}.`,
+    probe?.requested_model ? `Requested model: ${probe.requested_model}.` : "",
+    sample ? `Shared sample: ${sample.outcome}, ${sample.latency_ms} ms at ${date(sample.checked_at)}${age > 300 ? " (STALE)" : ""}. Actual served model not independently verified.` : "No active inference evidence.",
+    scoped ? "Results appear in Repository evidence after the assessment finishes." : "No scoped model-provider incident; active check unavailable.",
+    copilotMessage,
+  ].filter(Boolean).join(" ");
 }
 function renderSelection() {
   const selection = state.selection;
@@ -149,6 +145,7 @@ function renderChecks() {
 }
 function render() {
   renderSelection();
+  renderCopilotProbe();
   const report = state.latest;
   const discovery = state.discovery;
   const known = discovery?.latest || report?.inventory;
@@ -273,6 +270,19 @@ $("refresh").addEventListener("click", async () => {
   } catch { actionMessage = "Refresh failed: local server unreachable. No assessment confirmed."; }
   await load();
 });
+$("copilot-probe").addEventListener("click", async () => {
+  if (copilotSubmitting) return;
+  copilotSubmitting = true;
+  renderCopilotProbe();
+  try {
+    const response = await fetch("/api/copilot-probe", {method: "POST", signal: AbortSignal.timeout(10000)});
+    const data = await response.json();
+    copilotMessage = response.ok ? "One active inference requested; this may consume Copilot credits."
+      : `Check not started: ${data.status || data.error || "local server error"}.`;
+  } catch { copilotMessage = "Request not confirmed. No automatic retry; check the latest sample before trying again."; }
+  finally { copilotSubmitting = false; }
+  await load();
+});
 $("filter").addEventListener("input", () => { visible = 50; renderChecks(); });
 $("evidence-repository").addEventListener("change", () => { visible = 50; renderChecks(); });
 $("more").addEventListener("click", () => { visible += 50; renderChecks(); });
@@ -310,6 +320,7 @@ $("repository-names").addEventListener("input", () => {
   renderAssessedRepositoryDropdown();
 });
 $("assessed-repository").addEventListener("change", () => {
+  if ($("assessed-repository").disabled) return;
   const name = $("assessed-repository").value;
   if (!name) return;
   const names = selectedRepositoryNames();
