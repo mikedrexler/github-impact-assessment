@@ -337,11 +337,22 @@ def selected_inventory(
     }
 
 
+def organization_name(value: Any) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?", value):
+        raise ValueError("Use an exact GitHub organization login")
+    return value.lower()
+
+
 def inventory(
     client: Client, *, deadline: float | None = None,
     request_limit: int | None = None, state: InventoryState | None = None,
     selected: tuple[str, ...] | None = None,
+    organization: str | None = None,
 ) -> dict:
+    if organization is not None:
+        organization = organization_name(organization)
+        if selected is not None:
+            raise ValueError("Organization discovery and selected validation are separate")
     state = state if state is not None else InventoryState()
     if selected is not None:
         return selected_inventory(client, selected, state, deadline, request_limit)
@@ -358,9 +369,12 @@ def inventory(
                 raise ProbeError("inventory_deadline", "Discovery batch time budget reached; progress saved for automatic continuation")
             if request_limit is not None and client.requests >= request_limit:
                 raise ProbeError("inventory_request_limit", "Discovery batch request budget reached; progress saved for automatic continuation")
-            rows = client.get(
+            path = (
+                f"/orgs/{organization}/repos?per_page=100&page={state.next_page}&type=all&sort=full_name&direction=asc"
+                if organization else
                 f"/user/repos?per_page=100&page={state.next_page}&affiliation=owner,collaborator,organization_member&sort=full_name&direction=asc"
             )
+            rows = client.get(path)
             if not isinstance(rows, list):
                 raise ProbeError("invalid_response", "Repository enumeration was not a list")
             page_repositories = {}
@@ -369,6 +383,8 @@ def inventory(
                     raise ProbeError("invalid_response", "Invalid repository in enumeration")
                 name = row["full_name"]
                 repository_path(name)
+                if organization and name.split("/")[0].casefold() != organization:
+                    raise ProbeError("repository_mismatch", "Organization enumeration returned an out-of-scope repository")
                 page_repositories[name] = {
                     "name": name, "url": f"https://github.com/{name}",
                     "archived": bool(row.get("archived")),
@@ -414,6 +430,6 @@ def inventory(
         "scan_started_at": state.started_at, "last_completed_at": state.completed_at,
         "scan_discovered": len(state.pending),
         "cached_repositories": sum(repo["name"] not in state.pending for repo in repositories),
-        "scope": "Credential-visible owned, collaborator and organization-member repositories. Invisible/SSO-restricted repositories and unrelated public repositories are not enumerable here.",
+        "scope": f"Organization-only discovery: {organization}. No account-wide repository enumeration." if organization else "Credential-visible owned, collaborator and organization-member repositories. Invisible/SSO-restricted repositories and unrelated public repositories are not enumerable here.",
         "access_caveat": "Discovery completion is not proof of full account access: token selection, SSO and permissions can silently hide repositories. Cached entries may have changed access.",
     }

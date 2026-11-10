@@ -48,6 +48,10 @@ class DemoClient:
             return [
                 {"full_name": name, **metadata} for name, metadata in fixtures.items()
             ]
+        if path.startswith("/orgs/"):
+            organization = path.split("/")[2]
+            return [{"full_name": name, **metadata} for name, metadata in fixtures.items()
+                    if name.split("/")[0] == organization]
         if "/limited-access/" in path:
             raise ProbeError("permission_or_secondary_limit", "FIXTURE: Read-only endpoint returned HTTP 403")
         if "/actions/runs?" in path:

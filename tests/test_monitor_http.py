@@ -299,7 +299,7 @@ class HttpTests(unittest.TestCase):
             {"Origin": "null"},
             {"Sec-Fetch-Site": "cross-site"},
         ]:
-            for method, path in [("GET", "/api/state"), ("GET", "/api/past-incidents"), ("POST", "/api/refresh"), ("POST", "/api/repositories"), ("POST", "/api/copilot-probe")]:
+            for method, path in [("GET", "/api/state"), ("GET", "/api/past-incidents"), ("POST", "/api/refresh"), ("POST", "/api/repositories"), ("POST", "/api/copilot-probe"), ("POST", "/api/organization")]:
                 with self.subTest(headers=headers, method=method):
                     self.assertEqual(self.request(method, path, headers=headers)[0], 403)
 
@@ -370,6 +370,20 @@ class HttpTests(unittest.TestCase):
         self.assertIn(b"previous scope remains active", response[2])
         self.assertNotIn(b"secret-file-path", response[2])
         self.assertEqual(self.monitor.snapshot()["selection"], before)
+
+    def test_organization_endpoint_rejects_arbitrary_paths_and_does_not_change_scope(self):
+        before = self.monitor.snapshot()["selection"]
+        headers = {"Content-Type": "application/json"}
+        response = self.request("POST", "/api/organization", json.dumps({"organization": "example"}), headers)
+        self.assertEqual(response[0], 202)
+        self.assertEqual(self.monitor.snapshot()["selection"], before)
+        self.assertEqual(self.request("POST", "/api/organization", json.dumps({"organization": "example"}), headers)[0], 409)
+        for value in [{}, [], {"organization": "org/repo"}, {"organization": "org", "url": "https://evil"},
+                      {"organization": "../org"}, {"organization": ["org"]}]:
+            self.assertEqual(self.request("POST", "/api/organization", json.dumps(value), headers)[0], 400)
+        self.assertEqual(self.request("POST", "/api/organization", "{}", {})[0], 400)
+        self.assertEqual(self.request("POST", "/api/organization", "x" * 49153, headers)[0], 400)
+        self.assertEqual(self.request("GET", "/api/organization")[0], 404)
 
 
 if __name__ == "__main__":

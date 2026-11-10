@@ -29,16 +29,24 @@
         <fieldset class="repository-picker">
           <legend>Discover and add repositories</legend>
           <div class="repository-picker-controls">
-            <button type="button" id="all-repositories">Discover all accessible repositories</button>
             <div class="repository-picker-select">
-              <label for="assessed-repository">Add repository to assess</label>
-              <select id="assessed-repository" aria-describedby="assessed-repository-help discovery-scope-help" disabled><option value="">Run account-wide discovery first</option></select>
+              <label for="repository-organization">Organization</label>
+              <input id="repository-organization" list="repository-organizations" placeholder="Exact organization login" autocomplete="off" spellcheck="false">
+              <datalist id="repository-organizations"></datalist>
             </div>
+            <button type="button" id="discover-organization" disabled>Discover organization repositories</button>
+          </div>
+          <div class="repository-picker-controls">
+            <div class="repository-picker-select">
+              <label for="assessed-repository">Available repositories (multi-select)</label>
+              <select id="assessed-repository" multiple size="6" aria-describedby="assessed-repository-help discovery-scope-help" disabled></select>
+            </div>
+            <button type="button" id="add-selected-repositories" disabled>Add selected repositories</button>
             <button type="button" id="select-all-repositories" aria-describedby="select-all-help" disabled>Select all available repositories</button>
           </div>
-          <p id="assessed-repository-help" class="muted">Use Discover all accessible repositories to enable this dropdown, or enter exact owner/repo names below without an account-wide crawl.</p>
-          <p id="discovery-scope-help" class="muted">Discovery enables account-wide discovery and assessment. Choosing a repository adds it to your draft; apply the selected list below to restrict ongoing checks.</p>
-          <p id="select-all-help" class="muted">Select all adds the currently listed repositories to your draft, not undiscovered repositories. Apply the selected list below to start assessments within the displayed selection limit.</p>
+          <p id="assessed-repository-help" class="muted" role="status" aria-live="polite">Choose an organization and discover its repositories, then multi-select results or select all available repositories.</p>
+          <p id="discovery-scope-help" class="muted">Discovery does not change assessment scope. Apply your Selected repositories draft below to assess it.</p>
+          <p id="select-all-help" class="muted">Select all adds only this organization's available results; existing draft names are kept. Partial discovery is not a complete inventory.</p>
         </fieldset>
         <label for="repository-names">Selected repositories (one <code>owner/repo</code> per line, or comma-separated; remove a name to exclude it)</label>
         <textarea id="repository-names" rows="4" spellcheck="false" placeholder="my-org/service-api&#10;my-org/web-app" aria-describedby="selection-help"></textarea>

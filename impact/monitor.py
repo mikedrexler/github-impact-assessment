@@ -14,7 +14,7 @@ from typing import Callable
 
 from .agent import Agent
 from .assessment import assess, timestamp
-from .client import Backoff, Client, Config, InventoryState, ProbeError, credentials, inventory, repository_selection
+from .client import Backoff, Client, Config, InventoryState, ProbeError, credentials, inventory, organization_name, repository_selection
 from .history import EVIDENCE_LIMIT, HISTORY_LIMIT, incident_order, project_incidents
 from .copilot_probe import CopilotProbe
 from .selection_store import SelectionStore
@@ -62,6 +62,76 @@ class Monitor:
         self._selected = repository_selection(list(selected), config.max_repositories) if selected else selected
         self._discovery_opted_in = selected is None
         self._pending_selection: dict | None = None
+        self._organization: str | None = None
+        self._organization_inventory = InventoryState()
+        self._organization_report = None
+        self._organization_error = None
+        self._organization_error = None
+        self._organization_busy = False
+        self._organization_due = float("inf")
+        self._organization_last_request = float("-inf")
+
+    def discover_organization(self, organization: str) -> str:
+        organization = organization_name(organization)
+        with self._lock:
+            if self.stop_event.is_set():
+                return "stopped"
+            if self._organization_busy:
+                return "already_running"
+            if self._organization == organization and self._organization_due != float("inf"):
+                return "already_running"
+            if time.monotonic() - self._organization_last_request < 10:
+                return "throttled"
+            self._organization_last_request = time.monotonic()
+            self._organization = organization
+            self._organization_inventory = InventoryState()
+            self._organization_report = None
+            self._organization_error = None
+            self._organization_due = 0.0
+            self._wake.set()
+        return "accepted"
+
+    def _discover_organization(self):
+        with self._lock:
+            self._organization_busy = True
+            organization = self._organization
+        delay = float("inf")
+        try:
+            if organization is None:
+                raise ValueError("Organization required")
+            client = self._new_client(replace(
+                self.config, cycle_seconds=self.config.discovery_seconds,
+                max_requests=min(self.config.max_requests, self.config.discovery_requests),
+            ))
+            report = inventory(
+                client, organization=organization, state=self._organization_inventory,
+                deadline=time.monotonic() + self.config.discovery_seconds,
+                request_limit=min(self.config.max_requests, self.config.discovery_requests),
+            )
+            reason = (report["reason"] or {}).get("kind")
+            if reason in {"inventory_deadline", "inventory_request_limit", "deadline", "request_limit"}:
+                delay = self.config.discovery_resume_seconds
+            elif reason == "rate_limit":
+                with self._backoff.lock:
+                    delay = max(self.config.poll_seconds, self._backoff.until - time.monotonic())
+            elif reason and reason != "inventory_limit":
+                delay = self.config.poll_seconds
+            report["updated_at"] = timestamp()
+            with self._lock:
+                self._organization_report = report
+                self._organization_error = None
+        except Exception as error:
+            with self._lock:
+                self._organization_error = {
+                    "kind": type(error).__name__,
+                    "message": "Organization discovery failed; results may be incomplete. No scope change applied.",
+                }
+            print(f"Organization discovery failed ({type(error).__name__}); no raw response logged", file=sys.stderr)
+            delay = self.config.poll_seconds
+        finally:
+            with self._lock:
+                self._organization_busy = False
+                self._organization_due = time.monotonic() + delay
 
     def select_repositories(self, mode: str, repositories: list) -> str:
         if not isinstance(mode, str) or mode not in {"selected", "all", "paused"}:
@@ -155,10 +225,12 @@ class Monitor:
                     self._requested = False
             if due:
                 self._cycle()
+            elif time.monotonic() >= self._organization_due:
+                self._discover_organization()
             elif time.monotonic() >= self._discovery_due:
                 self._discover()
             with self._lock:
-                delay = max(0.01, min(self._next_due, self._discovery_due) - time.monotonic())
+                delay = max(0.01, min(self._next_due, self._discovery_due, self._organization_due) - time.monotonic())
             self._wake.wait(delay)
             self._wake.clear()
 
@@ -170,6 +242,7 @@ class Monitor:
             token, auth = credentials()
             credential_key = hashlib.sha256(token.encode()).digest() if token else None
             if credential_key != self._credential_key:
+                self._organization_inventory = InventoryState()
                 self._inventory = InventoryState()
                 self._offset = 0
                 self._credential_key = credential_key
@@ -180,6 +253,9 @@ class Monitor:
                     self._discovery_error = None
                     self._discovery_due = 0.0
                     self._next_due = 0.0
+                    self._organization_report = None
+                    if self._organization:
+                        self._organization_due = 0.0
                     self._incident_evidence.clear()
             client = Client(token, config, self.stop_event, backoff=self._backoff)
         with self._lock:
@@ -196,12 +272,10 @@ class Monitor:
                 self.config, cycle_seconds=self.config.discovery_seconds,
                 max_requests=min(self.config.max_requests, self.config.discovery_requests),
             ))
-            scope_args = {"selected": self._selected} if self._selected is not None else {}
             report = inventory(
-                client, state=self._inventory,
+                client, state=self._inventory, selected=self._selected,
                 deadline=time.monotonic() + self.config.discovery_seconds,
                 request_limit=min(self.config.max_requests, self.config.discovery_requests),
-                **scope_args,
             )
             reason = (report["reason"] or {}).get("kind")
             if reason in {"inventory_deadline", "inventory_request_limit", "deadline", "request_limit"}:
@@ -332,6 +406,11 @@ class Monitor:
                 "next_poll_at": next_at, "server_time": timestamp(),
                 "config": asdict(self.config), "latest": self._latest,
                 "copilot_probe": self._copilot.snapshot(),
+                "organization_discovery": {
+                    "organization": self._organization, "busy": self._organization_busy,
+                    "pending": self._organization_due != float("inf"),
+                    "latest": self._organization_report, "error": self._organization_error,
+                },
                 "selection": {
                     "mode": "all" if self._selected is None else "selected" if self._selected else "paused",
                     "repositories": list(self._selected or ()),
