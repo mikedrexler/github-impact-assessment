@@ -14,7 +14,8 @@ from typing import Callable
 
 from .agent import Agent
 from .assessment import assess, timestamp
-from .client import Backoff, Client, Config, InventoryState, credentials, inventory, repository_selection
+from .client import Backoff, Client, Config, InventoryState, ProbeError, credentials, inventory, repository_selection
+from .history import EVIDENCE_LIMIT, HISTORY_LIMIT, incident_order, project_incidents
 
 
 class Monitor:
@@ -47,6 +48,10 @@ class Monitor:
         self._history: deque = deque(maxlen=10)
         self._error = None
         self._auth = "Not checked yet"
+        self._past = None
+        self._past_error = None
+        self._past_updated_at = None
+        self._incident_evidence: dict[str, dict] = {}
         self._selected = repository_selection(list(selected), config.max_repositories) if selected else selected
         self._pending_selection: dict | None = None
 
@@ -146,6 +151,7 @@ class Monitor:
                     self._discovery_error = None
                     self._discovery_due = 0.0
                     self._next_due = 0.0
+                    self._incident_evidence.clear()
             client = Client(token, config, self.stop_event, backoff=self._backoff)
         with self._lock:
             self._auth = auth
@@ -215,6 +221,8 @@ class Monitor:
                 found["complete"] = False
                 found["reason"] = {"kind": "discovery_error", "message": discovery_error["message"]}
             report = assess(client, self._offset, inventory_report=found, agent=self._agent)
+            self._collect_past(client)
+            report["requests_used"] = client.requests
             with self._lock:
                 self._offset = report.pop("next_offset")
                 self._latest = report
@@ -225,6 +233,19 @@ class Monitor:
                     "incidents": len(report["incidents"]),
                 })
                 self._error = None
+                for incident in report["incidents"]:
+                    rows = [row for row in report["checks"] if row["incident_id"] == incident["id"]]
+                    if not rows:
+                        continue
+                    self._incident_evidence.pop(incident["id"], None)
+                    self._incident_evidence[incident["id"]] = {
+                        "completed_at": report["completed_at"], "checks": copy.deepcopy(rows),
+                        "counts": {key: sum(row["classification"] == key for row in rows) for key in report["counts"]},
+                        "coverage": copy.deepcopy(report["coverage"]),
+                        "inventory_discovered": report["inventory"]["discovered"],
+                    }
+                while len(self._incident_evidence) > EVIDENCE_LIMIT:
+                    del self._incident_evidence[next(iter(self._incident_evidence))]
         except Exception as error:
             # Last-resort scheduler boundary: keep the prior timestamped snapshot,
             # surface failure, and never print exception text containing secrets.
@@ -236,6 +257,37 @@ class Monitor:
             with self._lock:
                 self._busy = False
                 self._next_due = time.monotonic() + self.config.poll_seconds
+
+    def _collect_past(self, client):
+        try:
+            incidents = project_incidents(client.past_incidents())
+            with self._lock:
+                self._past = incidents
+                self._past_updated_at = timestamp()
+                self._past_error = None
+        except ProbeError as error:
+            with self._lock:
+                self._past_error = {"kind": error.kind, "message": error.message, "at": timestamp()}
+        except Exception as error:
+            with self._lock:
+                self._past_error = {
+                    "kind": type(error).__name__, "at": timestamp(),
+                    "message": "Incident history refresh failed unexpectedly; prior history may be stale.",
+                }
+            print(f"Incident history failed ({type(error).__name__}); no raw response logged", file=sys.stderr)
+
+    def past_snapshot(self) -> dict:
+        with self._lock:
+            return copy.deepcopy({
+                "demo": self.demo, "updated_at": self._past_updated_at,
+                "error": self._past_error, "available": self._past is not None,
+                "poll_seconds": self.config.poll_seconds, "cycle_seconds": self.config.cycle_seconds,
+                "incidents": sorted([
+                    {**item, "assessment": self._incident_evidence.get(item["id"])}
+                    for item in self._past or []
+                ], key=incident_order, reverse=True),
+                "scope": f"Latest public Status history response only (up to {HISTORY_LIMIT} incidents, resolved/postmortem only); not an exhaustive archive. Latest observed assessment retained for up to {EVIDENCE_LIMIT} incidents in server memory, cleared on restart or credential change. No retrospective probes. Offline test results are not imported.",
+            })
 
     def snapshot(self) -> dict:
         with self._lock:

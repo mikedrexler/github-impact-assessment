@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 STATUS_URL = "https://www.githubstatus.com/api/v2/summary.json"
+INCIDENTS_URL = "https://www.githubstatus.com/api/v2/incidents.json"
 API_ROOT = "https://api.github.com"
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
@@ -225,6 +226,12 @@ class Client:
         if not path.startswith("/") or path.startswith("//") or "\\" in path or "#" in path:
             raise ProbeError("invalid_path", "Only fixed GitHub API paths are allowed")
         data, _ = self._json(API_ROOT + path, github=True, deadline=deadline, attempts=attempts)
+        return data
+
+    def past_incidents(self) -> dict:
+        data, _ = self._json(INCIDENTS_URL, github=False)
+        if not isinstance(data, dict) or not isinstance(data.get("incidents"), list):
+            raise ProbeError("invalid_response", "Status history response lacks incidents")
         return data
 
 

@@ -18,6 +18,9 @@ ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
+    "/past-incidents": ("past-incidents.html", "text/html; charset=utf-8"),
+    "/past.js": ("past.js", "text/javascript; charset=utf-8"),
+    "/ui.js": ("ui.js", "text/javascript; charset=utf-8"),
 }
 
 
@@ -71,6 +74,8 @@ def handler_for(monitor: Monitor):
                 return self._json(403, {"error": "Only same-origin loopback access is allowed"})
             if self.path == "/api/state":
                 return self._json(200, monitor.snapshot())
+            if self.path == "/api/past-incidents":
+                return self._json(200, monitor.past_snapshot())
             if self.path in ASSETS:
                 name, content_type = ASSETS[self.path]
                 return self._reply(200, files("impact").joinpath("static", name).read_bytes(), content_type)

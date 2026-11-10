@@ -132,6 +132,14 @@ Repositories outside a check batch rotate into later cycles. Credential changes 
 
 ## Evidence adapters and interpretation
 
+### Past Incidents
+
+Open **http://127.0.0.1:8765/past-incidents** or select **Past Incidents** in the navigation. Resolved/postmortem incidents are grouped by their start date, **newest first**, using your browser's local timezone. Filter by incident name, component or date. Each card links to GitHub Status and includes affected components, start/resolution timestamps and an expandable public timeline.
+
+The monitor reads the fixed public `/api/v2/incidents.json` endpoint once after each assessment, without credentials and within that assessment client's existing request/deadline limits. This is the latest public feed only (up to 50 incidents), **not an exhaustive archive**; no older-page crawling is performed. Active incidents stay on the live page. Timelines are limited to 100 updates per incident. A failed refresh visibly retains the last timestamped history with a stale/error warning and does not invalidate the live assessment.
+
+Environment evidence is separate from the public timeline. For up to 10 incidents, the monitor retains the **latest actual incident-time assessment sample** with per-repository classifications, reasons, links, timestamps and cycle-wide coverage/deferred counts. Samples are not cumulative across rotating batches. They remain available on the Past Incidents page once the incident appears resolved in the bounded public feed. This cache is **memory-only**, clears on restart or credential change, and does not store raw credentials. Public history is refetched on restart. An incident without retained observations explicitly shows **unknown / no incident-time assessment recorded**. The app does not reconstruct historical queue state, run retrospective probes, import the earlier one-off 37-repository investigation, or display offline test results as live evidence.
+
 Current component names were inspected directly from the live [Status JSON API](https://www.githubstatus.com/api/v2/summary.json). The app discovers IDs/names on every poll; names select adapters and IDs correlate incidents. New/unrecognized names use an explicit unsupported adapter. The live feed currently includes the following components:
 
 | Status component | Actual read-only evidence | What it cannot establish |
@@ -201,10 +209,10 @@ Requests set `store: false` and do not use server-side conversations. This is **
 
 ```text
 Browser (local static HTML/CSS/JS; no credentials)
-  -> loopback Python HTTP server: GET /api/state, POST /api/refresh, POST /api/repositories
+  -> loopback Python HTTP server: GET /api/state, GET /api/past-incidents, POST /api/refresh, POST /api/repositories
      -> single-flight scheduler: assessments + paced discovery-only batches
         -> cached inventory + 10-entry in-memory assessment summary history
-        -> public GitHub Status summary GET (no auth)
+        -> public GitHub Status summary + bounded incident history GET (no auth)
         -> exact selected /repos/{owner}/{repo} validation (no enumeration)
            OR explicitly enabled credential-visible /user/repos pagination
         -> bounded concurrent GET-only evidence adapters
@@ -217,6 +225,7 @@ Browser (local static HTML/CSS/JS; no credentials)
 - `impact/assessment.py`: live component mapping, conservative classifications and evidence projection.
 - `impact/agent.py`: optional strict-schema provider client, scoped read allowlist, sequential planner, sanitization, budgets and explicit fallback trace.
 - `impact/monitor.py`: independent assessment/discovery schedules on one worker, cancellation, shared backoff, rotating checks and timestamped snapshots.
+- `impact/history.py`: bounded public history projection and incident-date ordering; monitor retains separate incident-time evidence in memory.
 - `impact/app.py` and `impact/static/`: local server and responsive dashboard.
 - `run.py`: file-path launcher that resolves the bundled package independently of the current directory.
 - `impact/demo.py`: network-free incident fixtures.
@@ -227,6 +236,8 @@ Browser (local static HTML/CSS/JS; no credentials)
 
 ```sh
 python3 -m unittest discover -s tests -v
+# Replay the published November 9, 2026 Actions/Webhooks/Pages incident timeline:
+python3 -m unittest tests.test_november_9_incident -v
 python3 -m compileall -q impact tests
 # Optional development environment for static type checking:
 python3 -m venv .venv
@@ -243,6 +254,8 @@ python3 -m pip wheel --no-deps --wheel-dir dist .
 ```
 
 The offline unittest suite covers all current/future component mapping, no-incident/unknown status paths, pagination, SSO/permission/rate-limit errors, retries/budgets, incident timing, queue thresholds, self-hosting, application failure non-attribution, scheduler deduplication/periodic polling, bounded history, HTTP routes, cross-origin rejection and credential boundaries. Selection tests cover paused startup, exact-name validation, no account/organization crawl, selected-only incident checks, resumable validation, permission/identity gaps, scope transitions, bounded JSON and cross-origin rejection. Mocked planner tests cover adaptive follow-ups, malicious plans, schema/argument rejection, status/feature constraints, request/iteration/time bounds, provider errors, credential/data boundaries, read reuse and deterministic fallback. No test calls a real model. Mypy checks the Python application (including annotated and unannotated bodies); runtime guards validate external response shapes. The frontend is served directly without a JavaScript build pipeline.
+
+`tests/fixtures/incident_2026_11_09.json` preserves the public timestamps, component IDs and status transitions of [the November 9 incident](https://www.githubstatus.com/incidents/tp8cghg7tlc4). Its source API URL is included in the fixture. The replay verifies Actions-only onset, Webhooks/Pages expansion, monitoring and resolution, with a frozen-clock assessment. **All repository/run/job evidence in these offline tests is synthetic**, not a record of your environment during the outage. These tests do not alter the live dashboard or claim historical tenant impact.
 
 ## Troubleshooting
 

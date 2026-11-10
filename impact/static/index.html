@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GitHub Impact Assessment</title>
   <link rel="stylesheet" href="/style.css">
+  <script src="/ui.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -14,8 +15,9 @@
   </header>
   <main>
     <nav class="page-tabs" aria-label="Dashboard navigation">
-      <a id="dashboard-tab" href="#dashboard" aria-controls="dashboard-panel" aria-current="page">Impact assessment</a>
+      <a id="dashboard-tab" href="#dashboard" aria-controls="dashboard-panel" aria-current="page">Live Assessment</a>
       <a id="configuration-tab" href="#configuration" aria-controls="configuration-panel">Configuration</a>
+      <a href="/past-incidents">Past Incidents</a>
     </nav>
     <div id="notice" role="status" aria-live="polite">Connecting to local monitor...</div>
     <div id="configuration-panel" aria-labelledby="configuration-tab" hidden>
