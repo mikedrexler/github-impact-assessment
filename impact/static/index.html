@@ -46,7 +46,7 @@
             <button type="button" id="add-selected-repositories" disabled>Add selected repositories</button>
           </div>
           <p id="assessed-repository-help" class="muted" role="status" aria-live="polite">Choose an organization or owner to load its writable repositories automatically.</p>
-          <p id="discovery-scope-help" class="muted">Choosing an owner automatically loads the bounded credential-visible writable catalog and displays only that owner's repositories. Organization and personal-owner options load automatically. Loading uses paced, rate-limited requests and never changes assessment scope.</p>
+          <p id="discovery-scope-help" class="muted">Choosing an organization loads its repositories directly, without waiting for account-wide discovery. Personal owners use the credential-visible catalog. Only verified writable repositories are selectable; partial results and rate-limit waits are shown. Loading never changes assessment scope.</p>
         </fieldset>
         <label for="repository-names">2. Selected repositories (one <code>owner/repo</code> per line, or comma-separated; add exact names or remove a name to exclude it)</label>
         <textarea id="repository-names" rows="4" spellcheck="false" placeholder="my-org/service-api&#10;my-org/web-app" aria-describedby="selection-help"></textarea>

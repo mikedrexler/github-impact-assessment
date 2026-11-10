@@ -99,9 +99,11 @@ def handler_for(monitor: Monitor):
                         raise ValueError("Incomplete repository selection")
                     data = json.loads(raw)
                     if self.path == "/api/writable-repositories":
-                        if data != {}:
-                            raise ValueError("Expected empty object")
-                        status = monitor.discover_writable_repositories()
+                        if not isinstance(data, dict) or set(data) not in (set(), {"organization"}):
+                            raise ValueError("Expected optional organization only")
+                        if "organization" in data and not isinstance(data["organization"], str):
+                            raise ValueError("Expected organization login")
+                        status = monitor.discover_writable_repositories(**data)
                         return self._json(202 if status == "accepted" else 409, {"status": status})
                     if self.path == "/api/organization":
                         if not isinstance(data, dict) or set(data) != {"organization"}:
@@ -113,7 +115,7 @@ def handler_for(monitor: Monitor):
                     status = monitor.select_repositories(data["mode"], data["repositories"])
                 except (ValueError, UnicodeDecodeError, TypeError, RecursionError):
                     if self.path == "/api/writable-repositories":
-                        return self._json(400, {"error": "Writable repository discovery requires an empty JSON object"})
+                        return self._json(400, {"error": "Provide an empty object or one exact organization login"})
                     return self._json(400, {"error": "Provide one exact organization login only" if self.path == "/api/organization" else "Invalid selection: provide selected/all/paused mode and valid owner/repo names within the displayed limit"})
                 except TimeoutError:
                     return self._json(408, {"error": "Repository selection timed out; previous scope remains active"})

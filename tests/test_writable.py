@@ -7,6 +7,28 @@ from tests.test_assessment import FixtureClient
 
 
 class WritableTests(unittest.TestCase):
+    def test_selected_organization_loads_directly_without_account_traversal(self):
+        calls = []
+
+        class Scoped(DemoClient):
+            def get(self, path):
+                calls.append(path)
+                if path.startswith("/orgs/octodemo/repos?"):
+                    return [{"full_name": "octodemo/example", "permissions": {"push": True}},
+                            {"full_name": "octodemo/readonly", "permissions": {"pull": True}}]
+                raise AssertionError(f"Unexpected account-wide request: {path}")
+
+        monitor = Monitor(Config(), client_factory=Scoped, selected=())
+        before = monitor.snapshot()["selection"]
+        self.assertEqual(monitor.discover_writable_repositories("Octodemo"), "accepted")
+        monitor._discover_organization()
+        report = monitor.snapshot()["organization_discovery"]
+        self.assertEqual(report["organization"], "octodemo")
+        self.assertEqual([repo["name"] for repo in report["latest"]["repositories"]], ["octodemo/example"])
+        self.assertTrue(report["latest"]["complete"])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(monitor.snapshot()["selection"], before)
+
     def test_strict_permission_checks(self):
         for role in ["push", "maintain", "admin"]:
             self.assertTrue(has_write_access({"permissions": {role: True}}))

@@ -121,8 +121,8 @@ class Monitor:
                 self._organizations_busy = False
                 self._organizations_due = time.monotonic() + delay
 
-    def discover_writable_repositories(self) -> str:
-        return self._request_catalog(None, writable=True)
+    def discover_writable_repositories(self, organization: str | None = None) -> str:
+        return self._request_catalog(organization_name(organization) if organization is not None else None, writable=True)
 
     def discover_organization(self, organization: str) -> str:
         organization = organization_name(organization)
