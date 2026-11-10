@@ -81,7 +81,9 @@ function renderSelection() {
     selection.pending ? `Scope change queued (${selection.pending.mode}); applies after the running assessment/discovery batch finishes.` : "",
     selectionMessage,
   ].filter(Boolean).join(" ");
-  $("selection-help").textContent = `Up to ${selection.limit} exact owner/repo names. Selection is server-memory-only until restart; use --repos owner/repo at startup to preselect before any discovery.`;
+  $("selection-help").textContent = `Up to ${selection.limit} exact owner/repo names. ${selection.persistent
+    ? "Applied scope is saved on this server and restored after restart; unapplied drafts are not saved. Startup --repos or --all-repositories overrides saved scope."
+    : "This demo/test selection is memory-only and clears on restart."}`;
   for (const id of ["apply-repositories", "pause-repositories", "all-repositories"]) {
     $(id).disabled = selectionSaving || state.stopped;
   }

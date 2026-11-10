@@ -242,6 +242,15 @@ test("select all is disabled before discovery, with no names, while saving and w
   assert.equal(app.element("select-all-repositories").disabled, true);
 });
 
+test("selection help distinguishes persisted applied scope from temporary demo state", () => {
+  const app = dashboard();
+  app.run(`state.selection = {repositories: [], pending: null, limit: 200, persistent: true}; renderSelection();`);
+  assert.match(app.element("selection-help").textContent, /restored after restart/);
+  assert.match(app.element("selection-help").textContent, /unapplied drafts are not saved/);
+  app.run("state.selection.persistent = false; renderSelection();");
+  assert.match(app.element("selection-help").textContent, /demo\/test selection is memory-only/);
+});
+
 test("active inference control requires configuration and scoped incident and labels stale shared samples", () => {
   const app = dashboard();
   app.run("renderCopilotProbe();");

@@ -17,6 +17,7 @@ from .assessment import assess, timestamp
 from .client import Backoff, Client, Config, InventoryState, ProbeError, credentials, inventory, repository_selection
 from .history import EVIDENCE_LIMIT, HISTORY_LIMIT, incident_order, project_incidents
 from .copilot_probe import CopilotProbe
+from .selection_store import SelectionStore
 
 
 class Monitor:
@@ -24,10 +25,12 @@ class Monitor:
         self, config: Config, *, client_factory: Callable | None = None,
         demo: bool = False, agent: Agent | None = None, selected: tuple[str, ...] | None = None,
         copilot_probe: CopilotProbe | None = None,
+        selection_store: SelectionStore | None = None,
     ):
         self.config = config
         self.demo = demo
         self._factory = client_factory
+        self._selection_store = selection_store if not demo else None
         # Injected clients stay network-isolated unless a planner is also injected.
         self._agent = agent if agent is not None else Agent.from_env(demo=demo or client_factory is not None)
         self._copilot = copilot_probe or CopilotProbe.from_env(isolated=demo or client_factory is not None)
@@ -77,6 +80,8 @@ class Monitor:
                 "mode": "all" if self._selected is None else "selected" if self._selected else "paused",
                 "repositories": list(self._selected or ()),
             }
+            if self._selection_store:
+                self._selection_store.save(mode, list(names))
             if requested == (self._pending_selection or active):
                 return "unchanged"
             self._pending_selection = requested
@@ -332,6 +337,7 @@ class Monitor:
                     "repositories": list(self._selected or ()),
                     "pending": self._pending_selection,
                     "discovery_opted_in": self._discovery_opted_in,
+                    "persistent": self._selection_store is not None,
                     "limit": min(self.config.max_repositories, 200),
                 },
                 "history": list(self._history), "error": self._error,

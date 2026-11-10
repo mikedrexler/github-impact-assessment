@@ -42,7 +42,7 @@
         </fieldset>
         <label for="repository-names">Selected repositories (one <code>owner/repo</code> per line, or comma-separated; remove a name to exclude it)</label>
         <textarea id="repository-names" rows="4" spellcheck="false" placeholder="my-org/service-api&#10;my-org/web-app" aria-describedby="selection-help"></textarea>
-        <p id="selection-help" class="muted">Selection is kept on this server until restart, not in browser storage. Use --repos owner/repo at startup to preselect before any discovery.</p>
+        <p id="selection-help" class="muted">Applied scope is saved on this server and restored after restart. Unapplied drafts are not saved. Demo selections remain temporary.</p>
         <div class="scope-actions">
           <button type="submit" id="apply-repositories">Assess selected repositories</button>
           <button type="button" id="pause-repositories">Pause repository checks</button>
