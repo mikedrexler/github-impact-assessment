@@ -352,7 +352,7 @@ class InventoryState:
 
 def selected_inventory(
     client: Client, names: tuple[str, ...], state: InventoryState,
-    deadline: float | None, request_limit: int | None,
+    deadline: float | None, request_limit: int | None, writable: bool = False,
 ) -> dict:
     if not state.scanning:
         state.pending = {}
@@ -373,9 +373,12 @@ def selected_inventory(
                 raise ProbeError("invalid_response", "Selected repository metadata is invalid")
             if row["full_name"].casefold() != name.casefold():
                 raise ProbeError("repository_mismatch", "Repository identity differs from the explicit selection; update the selection")
+            if writable and not has_write_access(row):
+                raise ProbeError("write_access_required", "Credential must report write, maintain or admin access; repository excluded")
             state.pending[name] = {
                 "name": name, "url": f"https://github.com/{name}",
                 "archived": bool(row.get("archived")),
+                "write_access": has_write_access(row),
                 "has_issues": row.get("has_issues") if isinstance(row.get("has_issues"), bool) else None,
                 "has_pages": row.get("has_pages") if isinstance(row.get("has_pages"), bool) else None,
             }
@@ -410,7 +413,8 @@ def selected_inventory(
         "scan_started_at": state.started_at, "last_completed_at": state.completed_at,
         "scan_discovered": len(repositories), "cached_repositories": 0,
         "scope": f"Explicit selection only: {len(names)} repositories. No account or organization repository enumeration.",
-        "access_caveat": "Only successfully validated selected repositories are assessed. Missing access, hidden/renamed repositories and failed reads remain gaps, not unaffected.",
+        "access_caveat": ("Only selected repositories with verified write/maintain/admin permission are assessed. " if writable else "Only successfully validated selected repositories are assessed. ")
+                         + "Missing access, hidden/renamed repositories and failed reads remain gaps, not unaffected.",
     }
 
 
@@ -420,11 +424,19 @@ def organization_name(value: Any) -> str:
     return value.lower()
 
 
+def has_write_access(row: dict) -> bool:
+    permissions = row.get("permissions")
+    return isinstance(permissions, dict) and any(
+        permissions.get(role) is True for role in ("push", "maintain", "admin")
+    )
+
+
 def inventory(
     client: Client, *, deadline: float | None = None,
     request_limit: int | None = None, state: InventoryState | None = None,
     selected: tuple[str, ...] | None = None,
     organization: str | None = None,
+    writable: bool = False,
 ) -> dict:
     if organization is not None:
         organization = organization_name(organization)
@@ -432,7 +444,7 @@ def inventory(
             raise ValueError("Organization discovery and selected validation are separate")
     state = state if state is not None else InventoryState()
     if selected is not None:
-        return selected_inventory(client, selected, state, deadline, request_limit)
+        return selected_inventory(client, selected, state, deadline, request_limit, writable)
     if not state.scanning:
         state.pending = {}
         state.next_page = 1
@@ -455,6 +467,7 @@ def inventory(
             if not isinstance(rows, list):
                 raise ProbeError("invalid_response", "Repository enumeration was not a list")
             page_repositories = {}
+            denied = set()
             for row in rows:
                 if not isinstance(row, dict) or not isinstance(row.get("full_name"), str):
                     raise ProbeError("invalid_response", "Invalid repository in enumeration")
@@ -462,12 +475,21 @@ def inventory(
                 repository_path(name)
                 if organization and name.split("/")[0].casefold() != organization:
                     raise ProbeError("repository_mismatch", "Organization enumeration returned an out-of-scope repository")
+                if writable and not has_write_access(row):
+                    denied.add(name.casefold())
+                    continue
                 page_repositories[name] = {
                     "name": name, "url": f"https://github.com/{name}",
                     "archived": bool(row.get("archived")),
+                    "write_access": has_write_access(row),
                     "has_issues": row.get("has_issues") if isinstance(row.get("has_issues"), bool) else None,
                     "has_pages": row.get("has_pages") if isinstance(row.get("has_pages"), bool) else None,
                 }
+            if denied:
+                for entries in (state.repositories, state.pending, page_repositories):
+                    for cached_name in list(entries):
+                        if cached_name.casefold() in denied:
+                            del entries[cached_name]
             state.sso_partial |= bool(getattr(client, "access_warnings", set()))
             for name, repository in page_repositories.items():
                 if name not in state.pending and len(state.pending) >= client.config.max_repositories:
@@ -507,6 +529,7 @@ def inventory(
         "scan_started_at": state.started_at, "last_completed_at": state.completed_at,
         "scan_discovered": len(state.pending),
         "cached_repositories": sum(repo["name"] not in state.pending for repo in repositories),
-        "scope": f"Organization-only discovery: {organization}. No account-wide repository enumeration." if organization else "Credential-visible owned, collaborator and organization-member repositories. Invisible/SSO-restricted repositories and unrelated public repositories are not enumerable here.",
+        "scope": ("Writable-only catalog: credential-reported write, maintain or admin access. " if writable else "")
+                 + (f"Organization-only discovery: {organization}. No account-wide repository enumeration." if organization else "Credential-visible owned, collaborator and organization-member repositories. Invisible/SSO-restricted repositories and unrelated public repositories are not enumerable here."),
         "access_caveat": "Discovery completion is not proof of full account access: token selection, SSO and permissions can silently hide repositories. Cached entries may have changed access.",
     }

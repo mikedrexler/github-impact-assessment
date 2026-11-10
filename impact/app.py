@@ -87,7 +87,7 @@ def handler_for(monitor: Monitor):
         def do_POST(self):
             if not self._allowed():
                 return self._json(403, {"error": "Only same-origin loopback access is allowed"})
-            if self.path in {"/api/repositories", "/api/organization"}:
+            if self.path in {"/api/repositories", "/api/organization", "/api/writable-repositories"}:
                 if self.headers.get("Transfer-Encoding") or self.headers.get("Content-Type") != "application/json":
                     return self._json(400, {"error": "Configuration requests require bounded JSON"})
                 try:
@@ -98,6 +98,11 @@ def handler_for(monitor: Monitor):
                     if len(raw) != length:
                         raise ValueError("Incomplete repository selection")
                     data = json.loads(raw)
+                    if self.path == "/api/writable-repositories":
+                        if data != {}:
+                            raise ValueError("Expected empty object")
+                        status = monitor.discover_writable_repositories()
+                        return self._json(202 if status == "accepted" else 409, {"status": status})
                     if self.path == "/api/organization":
                         if not isinstance(data, dict) or set(data) != {"organization"}:
                             raise ValueError("Expected organization only")
@@ -107,6 +112,8 @@ def handler_for(monitor: Monitor):
                         raise ValueError("Expected mode and repository list only")
                     status = monitor.select_repositories(data["mode"], data["repositories"])
                 except (ValueError, UnicodeDecodeError, TypeError, RecursionError):
+                    if self.path == "/api/writable-repositories":
+                        return self._json(400, {"error": "Writable repository discovery requires an empty JSON object"})
                     return self._json(400, {"error": "Provide one exact organization login only" if self.path == "/api/organization" else "Invalid selection: provide selected/all/paused mode and valid owner/repo names within the displayed limit"})
                 except TimeoutError:
                     return self._json(408, {"error": "Repository selection timed out; previous scope remains active"})

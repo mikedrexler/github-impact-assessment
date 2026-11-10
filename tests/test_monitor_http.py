@@ -120,7 +120,7 @@ class MonitorTests(unittest.TestCase):
                 if path.startswith("/user/repos?"):
                     self.requests += 1
                     if "page=1&" in path:
-                        return [{"full_name": f"example/r{i}"} for i in range(100)]
+                        return [{"full_name": f"example/r{i}", "permissions": {"push": True}} for i in range(100)]
                     self.page_two = True
                     return []
                 return super().get(path)
@@ -251,6 +251,15 @@ class MonitorTests(unittest.TestCase):
 
 
 class HttpTests(unittest.TestCase):
+    def test_writable_catalog_schema_and_scope(self):
+        before = self.monitor.snapshot()["selection"]
+        headers = {"Content-Type": "application/json"}
+        self.assertEqual(self.request("POST", "/api/writable-repositories", "{}", headers)[0], 202)
+        self.assertEqual(self.monitor.snapshot()["selection"], before)
+        for data in [[], None, {"owner": "org"}, {"url": "https://evil"}, {"mode": "all"}]:
+            self.assertEqual(self.request("POST", "/api/writable-repositories", json.dumps(data), headers)[0], 400)
+        self.assertEqual(self.request("GET", "/api/writable-repositories")[0], 404)
+
     def setUp(self):
         # Port zero is used only by tests, not accepted in user environment config.
         self.monitor = Monitor(Config(port=0), client_factory=DemoClient, demo=True)
@@ -299,7 +308,7 @@ class HttpTests(unittest.TestCase):
             {"Origin": "null"},
             {"Sec-Fetch-Site": "cross-site"},
         ]:
-            for method, path in [("GET", "/api/state"), ("GET", "/api/past-incidents"), ("POST", "/api/refresh"), ("POST", "/api/repositories"), ("POST", "/api/copilot-probe"), ("POST", "/api/organization")]:
+            for method, path in [("GET", "/api/state"), ("GET", "/api/past-incidents"), ("POST", "/api/refresh"), ("POST", "/api/repositories"), ("POST", "/api/copilot-probe"), ("POST", "/api/organization"), ("POST", "/api/writable-repositories")]:
                 with self.subTest(headers=headers, method=method):
                     self.assertEqual(self.request(method, path, headers=headers)[0], 403)
 

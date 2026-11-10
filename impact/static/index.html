@@ -22,19 +22,24 @@
     <div id="notice" role="status" aria-live="polite">Connecting to local monitor...</div>
     <div id="configuration-panel" aria-labelledby="configuration-tab" hidden>
     <h2 class="page-heading">Configuration</h2>
+    <p>Choose repositories you can write to. The configured server credential determines access; the monitor never writes to GitHub.</p>
     <section class="panel" aria-labelledby="repository-selection-title">
       <h2 id="repository-selection-title">Repositories to Assess</h2>
-      <p>Preselect exact repositories without crawling your organizations. Only selected repositories are validated and assessed; all existing access and read-only safeguards still apply.</p>
+      <p>Personal, organization and collaborator repositories are supported. GitHub must report write, maintain or admin permission before a repository is assessed. Missing permissions are an explicit gap, not an all-clear.</p>
       <form id="repository-selection">
         <fieldset class="repository-picker">
-          <legend>Discover and add repositories</legend>
+          <legend>1. Find writable repositories</legend>
           <div class="repository-picker-controls">
+            <button type="button" id="discover-organization">Find my writable repositories</button>
             <div class="repository-picker-select">
-              <label for="repository-organization">Organization</label>
-              <input id="repository-organization" list="repository-organizations" placeholder="Exact organization login" autocomplete="off" spellcheck="false">
+              <label for="repository-organization">Filter by owner (optional)</label>
+              <input id="repository-organization" list="repository-organizations" placeholder="Any personal or organization owner" autocomplete="off" spellcheck="false">
               <datalist id="repository-organizations"></datalist>
             </div>
-            <button type="button" id="discover-organization" disabled>Discover organization repositories</button>
+            <div class="repository-picker-select">
+              <label for="repository-search">Search repositories</label>
+              <input id="repository-search" type="search" placeholder="Filter by owner or repository name">
+            </div>
           </div>
           <div class="repository-picker-controls">
             <div class="repository-picker-select">
@@ -42,29 +47,32 @@
               <select id="assessed-repository" multiple size="6" aria-describedby="assessed-repository-help discovery-scope-help" disabled></select>
             </div>
             <button type="button" id="add-selected-repositories" disabled>Add selected repositories</button>
-            <button type="button" id="select-all-repositories" aria-describedby="select-all-help" disabled>Select all available repositories</button>
+            <button type="button" id="select-all-repositories" aria-describedby="select-all-help" disabled>Add all filtered repositories</button>
           </div>
-          <p id="assessed-repository-help" class="muted" role="status" aria-live="polite">Choose an organization and discover its repositories, then multi-select results or select all available repositories.</p>
-          <p id="discovery-scope-help" class="muted">Discovery does not change assessment scope. Apply your Selected repositories draft below to assess it.</p>
-          <p id="select-all-help" class="muted">Select all adds only this organization's available results; existing draft names are kept. Partial discovery is not a complete inventory.</p>
+          <p id="assessed-repository-help" class="muted" role="status" aria-live="polite">Find repositories visible to your credential with verified write permission, or enter exact names below without discovery.</p>
+          <p id="discovery-scope-help" class="muted">Discovery is optional and uses paced, rate-limited requests. It does not change assessment scope. Owner and search filters are local only.</p>
+          <p id="select-all-help" class="muted">Add all includes only filtered results, keeping existing draft names. Partial discovery is not a complete inventory; no read-only or unknown-permission results are selectable.</p>
         </fieldset>
-        <label for="repository-names">Selected repositories (one <code>owner/repo</code> per line, or comma-separated; remove a name to exclude it)</label>
+        <label for="repository-names">2. Selected repositories (one <code>owner/repo</code> per line, or comma-separated; add exact names or remove a name to exclude it)</label>
         <textarea id="repository-names" rows="4" spellcheck="false" placeholder="my-org/service-api&#10;my-org/web-app" aria-describedby="selection-help"></textarea>
         <p id="selection-help" class="muted">Applied scope is saved on this server and restored after restart. Unapplied drafts are not saved. Demo selections remain temporary.</p>
         <div class="scope-actions">
-          <button type="submit" id="apply-repositories">Assess selected repositories</button>
+          <button type="submit" id="apply-repositories">Save and verify selected repositories</button>
           <button type="button" id="pause-repositories">Pause repository checks</button>
         </div>
       </form>
       <p id="selection-status" role="status" aria-live="polite">Loading repository scope...</p>
+      <div id="selection-validation" class="panel" aria-live="polite"></div>
     </section>
     <section class="panel" aria-labelledby="copilot-probe-title">
-      <h2 id="copilot-probe-title">Copilot model-path inference (optional, active)</h2>
+      <details>
+      <summary id="copilot-probe-title">Advanced: optional Copilot inference diagnostic</summary>
       <p>Potentially billable: sends one fixed, repository-free diagnostic prompt through the supported Copilot SDK. No tools, MCP servers, repository access or IDE automation. Not a read-only API check.</p>
       <p class="muted">Disabled by default. Server setup requires the optional Copilot SDK, an explicit supported model, compatible CLI and a separate Copilot credential. See README. Credentials cannot be entered through this dashboard.</p>
       <p id="copilot-probe-status" role="status" aria-live="polite">Disabled unless configured on the server.</p>
       <button id="copilot-probe" type="button" disabled>Run one active Copilot inference check</button>
       <p class="muted">Manual only, at most 3 attempts per rolling hour (including failed attempts), 15-second timeout; no application retries. Available only for a mapped unresolved Copilot AI Model Providers incident and assessed repositories. Billing controls must enforce any monetary/credit ceiling.</p>
+      </details>
     </section>
     </div>
     <div id="dashboard-panel" aria-labelledby="dashboard-tab">

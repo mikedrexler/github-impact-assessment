@@ -23,11 +23,13 @@ function selectedRepositoryNames() {
 function renderAssessedRepositoryDropdown() {
   const dropdown = $("assessed-repository");
   const organization = $("repository-organization").value.trim().toLowerCase();
+  const query = $("repository-search").value.trim().toLowerCase();
   const discovery = state?.organization_discovery;
-  const matches = Boolean(organization && discovery?.organization === organization);
+  const matches = discovery?.writable === true;
   const known = matches ? discovery.latest?.repositories || [] : [];
-  const repositories = [...new Set(known.map(repo => repo.name)
-    .filter(name => name.split("/")[0].toLowerCase() === organization))].sort((a, b) => a.localeCompare(b));
+  const repositories = [...new Set(known.filter(repo => repo.write_access === true).map(repo => repo.name)
+    .filter(name => (!organization || name.split("/")[0].toLowerCase() === organization)
+      && name.toLowerCase().includes(query)))].sort((a, b) => a.localeCompare(b));
   const values = repositories;
   const selected = new Set([...dropdown.options].filter(option => option.selected).map(option => option.value));
   if (JSON.stringify([...dropdown.options].map(option => option.value)) !== JSON.stringify(values)) {
@@ -41,21 +43,21 @@ function renderAssessedRepositoryDropdown() {
   dropdown.disabled = !matches || !repositories.length || selectionSaving || Boolean(state?.stopped);
   $("select-all-repositories").disabled = dropdown.disabled;
   $("add-selected-repositories").disabled = dropdown.disabled || ![...dropdown.options].some(option => option.selected);
-  $("discover-organization").disabled = selectionSaving || Boolean(state?.stopped) || Boolean(discovery?.busy)
-    || !/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(organization);
+  $("discover-organization").disabled = selectionSaving || Boolean(state?.stopped) || Boolean(discovery?.busy);
   $("assessed-repository-help").textContent = matches
     ? [
-      `${repositories.length} repositories available for ${organization}.`,
+      `${repositories.length} writable repositories match your filters.`,
       discovery.busy || discovery.pending ? "Discovery queued/running or waiting for continuation." : "",
       discovery.error?.message || discovery.latest?.reason?.message,
-      discovery.latest?.complete ? "Bounded organization traversal complete; permissions may still hide repositories." : "Coverage partial or pending; missing repositories are not unaffected.",
+      discovery.latest?.complete ? "Bounded writable catalog traversal complete; credential/SSO restrictions may still hide repositories." : "Coverage partial or pending; missing repositories are not unaffected.",
       "Ctrl/Cmd-click or Shift to multi-select, then Add selected repositories.",
     ].filter(Boolean).join("\n")
-    : "Choose an exact organization login and discover its repositories first. No account-wide enumeration is needed.";
+    : "Find my writable repositories to browse personal, organization and collaborator access, or enter exact owner/repo names below. No discovery is required for manual entry.";
   const owners = new Set([
     ...(state?.discovery?.latest?.repositories || []).map(repo => repo.name.split("/")[0]),
     ...(state?.selection?.repositories || []).map(name => name.split("/")[0]),
     ...selectedRepositoryNames().map(name => name.split("/")[0]),
+    ...known.map(repo => repo.name.split("/")[0]),
   ]);
   $("repository-organizations").replaceChildren(...[...owners].sort().map(owner => {
     const option = node("option", owner); option.value = owner; return option;
@@ -86,7 +88,7 @@ function renderSelection() {
   const description = selection.mode === "paused"
     ? "Repository checks paused. No repository discovery requests. Choose repositories to begin; public Status polling continues."
     : selection.mode === "selected"
-      ? `Selected scope: ${selection.repositories.length} repositories. No account-wide crawl.`
+      ? `Saved selection: ${selection.repositories.length} repositories; only verified write-access repositories are assessed. No account-wide crawl.`
       : "Account-wide discovery is enabled.";
   $("selection-status").textContent = [
     description,
@@ -95,7 +97,18 @@ function renderSelection() {
   ].filter(Boolean).join(" ");
   $("selection-help").textContent = `Up to ${selection.limit} exact owner/repo names. ${selection.persistent
     ? "Applied scope is saved on this server and restored after restart; unapplied drafts are not saved. Startup --repos or --all-repositories overrides saved scope."
-    : "This demo/test selection is memory-only and clears on restart."}`;
+    : "This demo/test selection is memory-only and clears on restart."} Saved names are requests, not access approval: server-side validation excludes read-only, unknown or revoked permissions.`;
+  const validation = state.discovery?.latest;
+  const validationPanel = $("selection-validation");
+  validationPanel.replaceChildren();
+  const verified = validation?.repositories?.filter(repo => repo.write_access === true) || [];
+  paragraph(validationPanel, `Verified writable repositories: ${verified.length}. ${state.discovery?.busy ? "Verification running." : validation ? "Latest server validation shown below." : "Awaiting server validation."} Saved names are assessed only after permission verification.`);
+  for (const repo of verified) paragraph(validationPanel, `${repo.name} — write access verified${repo.archived ? "; archived repository" : ""}.`);
+  for (const error of validation?.repository_errors || []) {
+    paragraph(validationPanel, `${error.repository}: ${error.kind} — ${error.message}`, "error");
+  }
+  if (validation && !validation.complete && validation.reason) paragraph(validationPanel, `Partial verification: ${validation.reason.message}`, "warning");
+  paragraph(validationPanel, "Permissions reflect the configured GitHub credential, not necessarily your browser account. Rechecked during metadata validation; complete selections are revalidated hourly. Revocations or credential restrictions can produce coverage gaps.", "muted");
   for (const id of ["apply-repositories", "pause-repositories", "discover-organization"]) {
     $(id).disabled = selectionSaving || state.stopped;
   }
@@ -376,12 +389,13 @@ function addPickerRepositories(all) {
   } else {
     $("repository-names").value = [...names.values()].join("\n");
     selectionDirty = true;
-    selectionMessage = `Draft now contains ${names.size} repositories. Discovery may be partial; newly discovered repositories are not added automatically. Click Assess selected repositories to apply.`;
+    selectionMessage = `Draft now contains ${names.size} repositories. Discovery may be partial; newly discovered repositories are not added automatically. Click Save and verify selected repositories to apply.`;
   }
   renderSelection();
 }
 $("assessed-repository").addEventListener("change", renderAssessedRepositoryDropdown);
 $("repository-organization").addEventListener("input", renderAssessedRepositoryDropdown);
+$("repository-search").addEventListener("input", renderAssessedRepositoryDropdown);
 $("add-selected-repositories").addEventListener("click", () => addPickerRepositories(false));
 $("select-all-repositories").addEventListener("click", () => addPickerRepositories(true));
 $("repository-selection").addEventListener("submit", (event) => {
@@ -394,15 +408,15 @@ $("discover-organization").addEventListener("click", async () => {
   selectionSaving = true;
   renderSelection();
   try {
-    const response = await fetch("/api/organization", {
+    const response = await fetch("/api/writable-repositories", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({organization: $("repository-organization").value.trim()}),
+      body: JSON.stringify({}),
       signal: AbortSignal.timeout(10000),
     });
     const data = await response.json();
-    selectionMessage = response.ok ? "Organization discovery queued. Assessment scope is unchanged."
-      : `Organization discovery not started: ${data.error || data.status || response.status}`;
-  } catch { selectionMessage = "Organization discovery request failed; assessment scope is unchanged."; }
+    selectionMessage = response.ok ? "Writable repository discovery queued. Assessment scope is unchanged."
+      : `Writable discovery not started: ${data.error || data.status || response.status}`;
+  } catch { selectionMessage = "Writable discovery request failed; assessment scope is unchanged."; }
   finally { selectionSaving = false; }
   await load();
 });

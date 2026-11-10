@@ -127,11 +127,11 @@ test("repository option labels are plain text, never HTML", () => {
   assert.equal(app.element("evidence-repository").options[1].value, name);
 });
 
-test("organization multi-select adds chosen results only on explicit Add", () => {
+test("owner-filtered writable multi-select adds chosen results only on explicit Add", () => {
   const app = dashboard();
   app.element("repository-organization").value = "org";
   app.run(`state.selection = {repositories: ["org/a"], pending: null, limit: 200, discovery_opted_in: true};
-    state.organization_discovery = {organization:"org", latest: {repositories: [{name:"org/a"}, {name:"org/b"}, {name:"other/hidden"}]}};
+    state.organization_discovery = {writable:true,organization:"org", latest: {repositories: [{name:"org/a",write_access:true}, {name:"org/b",write_access:true}, {name:"other/hidden",write_access:true}]}};
     renderSelection();`);
   assert.deepEqual(app.element("assessed-repository").options.map(option => option.value), ["org/a", "org/b"]);
   app.element("assessed-repository").options[1].selected = true;
@@ -146,7 +146,7 @@ test("organization multi-select adds chosen results only on explicit Add", () =>
   assert.equal(app.element("repository-names").value, "org/a\norg/b");
 });
 
-test("manual entry does not bypass organization discovery and multi-selection survives refresh", () => {
+test("manual entry remains separate from writable catalog and multi-selection survives refresh", () => {
   const app = dashboard();
   app.run('state.selection = {repositories: [], pending: null, limit: 200, discovery_opted_in: true}; renderSelection();');
   assert.equal(app.element("assessed-repository").disabled, true);
@@ -154,7 +154,7 @@ test("manual entry does not bypass organization discovery and multi-selection su
   app.element("repository-names").events.input();
   assert.equal(app.element("assessed-repository").disabled, true);
   app.element("repository-organization").value = "org";
-  app.run(`state.organization_discovery = {organization:"org", latest:{repositories:[{name:"org/repo"}]}}; renderSelection();`);
+  app.run(`state.organization_discovery = {writable:true,organization:"org", latest:{repositories:[{name:"org/repo",write_access:true}]}}; renderSelection();`);
   app.element("assessed-repository").options[0].selected = true;
   app.element("assessed-repository").events.change();
   app.run("renderSelection();");
@@ -165,16 +165,16 @@ test("manual entry does not bypass organization discovery and multi-selection su
   assert.equal(app.element("assessed-repository").disabled, true);
 });
 
-test("changing organization clears old options without changing the manual draft", () => {
+test("changing owner filter clears hidden options without changing the manual draft", () => {
   const app = dashboard();
   app.element("repository-organization").value = "org";
   app.run(`state.selection = {repositories: ["org/a"], pending: null, limit: 200, discovery_opted_in: false};
-    state.discovery = {latest: {repositories: [{name:"org/a"}, {name:"org/b"}]}};
+    state.discovery = {latest: {repositories: [{name:"org/a",write_access:true}, {name:"org/b",write_access:true}]}};
     renderSelection();`);
   assert.equal(app.element("assessed-repository").disabled, true);
   assert.equal(app.element("assessed-repository").options.length, 0);
   assert.equal(app.element("repository-names").value, "org/a");
-  app.run(`state.organization_discovery = {organization:"org",latest:{repositories:[{name:"org/a"},{name:"org/b"}]}}; renderSelection();`);
+  app.run(`state.organization_discovery = {writable:true,organization:"org",latest:{repositories:[{name:"org/a",write_access:true},{name:"org/b",write_access:true}]}}; renderSelection();`);
   assert.equal(app.element("assessed-repository").disabled, false);
   app.element("repository-organization").value = "other";
   app.element("repository-organization").events.input();
@@ -193,13 +193,13 @@ test("navigation preserves tab order and discovery and dropdown share one compac
   const html = readFileSync(join(__dirname, "../impact/static/index.html"), "utf8");
   assert.match(html, /<h2 id="repository-selection-title">Repositories to Assess<\/h2>/);
   const picker = html.match(/<fieldset class="repository-picker">[\s\S]*?<\/fieldset>/)[0];
-  assert.match(picker, /<legend>Discover and add repositories<\/legend>/);
+  assert.match(picker, /<legend>1. Find writable repositories<\/legend>/);
   assert.match(picker, /type="button" id="discover-organization"/);
   assert.match(picker, /id="assessed-repository"/);
   assert.match(picker, /id="assessed-repository" multiple size="6"/);
-  assert.ok(picker.indexOf('id="repository-organization"') < picker.indexOf('id="discover-organization"'));
+  assert.ok(picker.indexOf('id="discover-organization"') < picker.indexOf('id="repository-organization"'));
   assert.match(picker, /type="button" id="select-all-repositories"[^>]* disabled/);
-  assert.match(picker, />Select all available repositories<\/button>/);
+  assert.match(picker, />Add all filtered repositories<\/button>/);
   assert.ok(picker.indexOf('id="discover-organization"') < picker.indexOf('id="assessed-repository"'));
   assert.ok(html.indexOf("</fieldset>") < html.indexOf('id="repository-names"'));
   assert.equal((html.match(/id="discover-organization"/g) || []).length, 1);
@@ -212,7 +212,7 @@ test("select all merges listed repositories into the draft without changing scop
   const app = dashboard();
   app.element("repository-organization").value = "org";
   app.run(`state.selection = {repositories: [], pending: null, limit: 3, discovery_opted_in: true};
-    state.organization_discovery = {organization:"org", latest: {repositories: [{name:"org/a"}, {name:"org/b"}]}};
+    state.organization_discovery = {writable:true,organization:"org", latest: {repositories: [{name:"org/a",write_access:true}, {name:"org/b",write_access:true}]}};
     renderSelection();`);
   app.element("repository-names").value = "Org/A\norg/manual";
   app.element("repository-names").events.input();
@@ -229,7 +229,7 @@ test("select all rejects over-limit sets without truncating or overwriting draft
   const app = dashboard();
   app.element("repository-organization").value = "org";
   app.run(`state.selection = {repositories: [], pending: null, limit: 2, discovery_opted_in: true};
-    state.organization_discovery = {organization:"org", latest: {repositories: [{name:"org/a"}, {name:"org/b"}, {name:"org/c"}]}};
+    state.organization_discovery = {writable:true,organization:"org", latest: {repositories: [{name:"org/a",write_access:true}, {name:"org/b",write_access:true}, {name:"org/c",write_access:true}]}};
     renderSelection();`);
   app.element("repository-names").value = "org/manual";
   app.element("repository-names").events.input();
@@ -247,7 +247,7 @@ test("select all is disabled before discovery, with no names, while saving and w
   app.run("state.selection.discovery_opted_in = true; renderSelection();");
   assert.equal(app.element("select-all-repositories").disabled, true);
   app.element("repository-organization").value = "org";
-  app.run('state.organization_discovery = {organization:"org",latest:{repositories:[{name:"org/a"}]}}; renderSelection();');
+  app.run('state.organization_discovery = {writable:true,organization:"org",latest:{repositories:[{name:"org/a",write_access:true}]}}; renderSelection();');
   assert.equal(app.element("select-all-repositories").disabled, false);
   app.run("selectionSaving = true; renderSelection();");
   assert.equal(app.element("select-all-repositories").disabled, true);
@@ -270,11 +270,11 @@ test("true multi-select retains chosen options during incremental catalog refres
   const app = dashboard();
   app.element("repository-organization").value = "org";
   app.run(`state.selection = {repositories:[],limit:200};
-    state.organization_discovery = {organization:"org", pending:true, latest:{repositories:[{name:"org/a"},{name:"org/b"}]}};
+    state.organization_discovery = {writable:true,organization:"org", pending:true, latest:{repositories:[{name:"org/a",write_access:true},{name:"org/b",write_access:true}]}};
     renderSelection();`);
   for (const option of app.element("assessed-repository").options) option.selected = true;
   app.element("assessed-repository").events.change();
-  app.run(`state.organization_discovery.latest.repositories.push({name:"org/c"}); renderSelection();`);
+  app.run(`state.organization_discovery.latest.repositories.push({name:"org/c",write_access:true}); renderSelection();`);
   assert.deepEqual(app.element("assessed-repository").options.filter(option => option.selected).map(option => option.value), ["org/a", "org/b"]);
   assert.match(app.element("assessed-repository-help").textContent, /partial/);
   app.element("add-selected-repositories").events.click();
@@ -282,7 +282,7 @@ test("true multi-select retains chosen options during incremental catalog refres
   assert.equal(app.run("state.selection.repositories.length"), 0);
 });
 
-test("organization discovery posts chosen organization only without applying assessment scope", async () => {
+test("writable discovery covers any owner without applying assessment scope", async () => {
   const app = dashboard();
   app.element("repository-organization").value = "My-Org";
   app.run(`state.selection = {repositories:["other/manual"],limit:200}; renderSelection();
@@ -290,19 +290,19 @@ test("organization discovery posts chosen organization only without applying ass
     fetch = async (url, options) => { requests.push([url, JSON.parse(options.body)]); return {ok:true,json:async()=>({status:"accepted"})}; };
     load = async () => { renderSelection(); };`);
   await app.element("discover-organization").events.click();
-  assert.equal(app.run("JSON.stringify(requests)"), '[["/api/organization",{"organization":"My-Org"}]]');
+  assert.equal(app.run("JSON.stringify(requests)"), '[["/api/writable-repositories",{}]]');
   assert.equal(app.element("repository-names").value, "other/manual");
   assert.match(app.element("selection-status").textContent, /scope is unchanged/);
   app.element("repository-organization").value = "org/repo";
   app.element("repository-organization").events.input();
-  assert.equal(app.element("discover-organization").disabled, true);
+  assert.equal(app.element("discover-organization").disabled, false);
 });
 
 test("discovery error and empty coverage are visible, with no enabled repository picker", async () => {
   const app = dashboard();
   app.element("repository-organization").value = "org";
   app.run(`state.selection = {repositories:[],limit:200};
-    state.organization_discovery = {organization:"org",latest:{repositories:[],reason:{message:"SSO authorization required"}},error:null};
+    state.organization_discovery = {writable:true,organization:"org",latest:{repositories:[],reason:{message:"SSO authorization required"}},error:null};
     renderSelection();`);
   assert.equal(app.element("assessed-repository").disabled, true);
   assert.match(app.element("assessed-repository-help").textContent, /SSO authorization required/);
@@ -371,4 +371,43 @@ test("continuous coverage renders budget deferrals, missing metadata and insuffi
   assert.match(panel.children[4].children[0].textContent, /stale/);
   app.run(`state.latest.observations = {enabled:false,error:"Storage failed; coverage unavailable"}; renderObservations();`);
   assert.match(panel.children[1].textContent, /Storage failed/);
+});
+
+test("writable picker spans all owner types, filters locally and excludes unverified permissions", () => {
+  const app = dashboard();
+  app.run(`state.selection = {repositories:[],limit:200}; state.organization_discovery = {
+    writable:true,latest:{complete:true,repositories:[
+      {name:"me/personal",write_access:true},
+      {name:"company/service",write_access:true},
+      {name:"friend/collaborator",write_access:true},
+      {name:"company/readonly",write_access:false},
+      {name:"company/unknown"}
+    ]}}; renderSelection();`);
+  assert.deepEqual(app.element("assessed-repository").options.map(option => option.value),
+    ["company/service", "friend/collaborator", "me/personal"]);
+  app.element("repository-search").value = "collab";
+  app.element("repository-search").events.input();
+  assert.deepEqual(app.element("assessed-repository").options.map(option => option.value), ["friend/collaborator"]);
+  app.element("select-all-repositories").events.click();
+  assert.equal(app.element("repository-names").value, "friend/collaborator");
+  app.element("repository-search").value = "";
+  app.element("repository-organization").value = "company";
+  app.element("repository-organization").events.input();
+  assert.deepEqual(app.element("assessed-repository").options.map(option => option.value), ["company/service"]);
+  app.element("select-all-repositories").events.click();
+  assert.equal(app.element("repository-names").value, "friend/collaborator\ncompany/service");
+  assert.equal(app.run("state.selection.repositories.length"), 0);
+});
+
+test("configuration shows verification failures rather than accepting manual names as approval", () => {
+  const app = dashboard();
+  app.run(`state.selection = {mode:"selected",repositories:["me/repo","org/denied"],limit:200};
+    state.discovery = {latest:{complete:false,repositories:[{name:"me/repo",write_access:true}],
+      repository_errors:[{repository:"org/denied",kind:"write_access_required",message:"Write access not verified"}],
+      reason:{message:"Some selected repositories failed validation"}}}; renderSelection();`);
+  const panel = app.element("selection-validation");
+  assert.match(panel.children[0].textContent, /Verified writable repositories: 1/);
+  assert.match(panel.children[2].textContent, /write_access_required/);
+  assert.match(app.element("selection-help").textContent, /not access approval/);
+  assert.equal(app.element("repository-names").value, "me/repo\norg/denied");
 });

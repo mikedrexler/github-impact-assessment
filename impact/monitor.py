@@ -73,20 +73,28 @@ class Monitor:
         self._organization_busy = False
         self._organization_due = float("inf")
         self._organization_last_request = float("-inf")
+        self._catalog_writable = False
+
+    def discover_writable_repositories(self) -> str:
+        return self._request_catalog(None, writable=True)
 
     def discover_organization(self, organization: str) -> str:
         organization = organization_name(organization)
+        return self._request_catalog(organization, writable=False)
+
+    def _request_catalog(self, organization: str | None, *, writable: bool) -> str:
         with self._lock:
             if self.stop_event.is_set():
                 return "stopped"
             if self._organization_busy:
                 return "already_running"
-            if self._organization == organization and self._organization_due != float("inf"):
+            if self._organization == organization and self._catalog_writable == writable and self._organization_due != float("inf"):
                 return "already_running"
             if time.monotonic() - self._organization_last_request < 10:
                 return "throttled"
             self._organization_last_request = time.monotonic()
             self._organization = organization
+            self._catalog_writable = writable
             self._organization_inventory = InventoryState()
             self._organization_report = None
             self._organization_error = None
@@ -100,14 +108,13 @@ class Monitor:
             organization = self._organization
         delay = float("inf")
         try:
-            if organization is None:
-                raise ValueError("Organization required")
             client = self._new_client(replace(
                 self.config, cycle_seconds=self.config.discovery_seconds,
                 max_requests=min(self.config.max_requests, self.config.discovery_requests),
             ))
             report = inventory(
                 client, organization=organization, state=self._organization_inventory,
+                writable=self._catalog_writable,
                 deadline=time.monotonic() + self.config.discovery_seconds,
                 request_limit=min(self.config.max_requests, self.config.discovery_requests),
             )
@@ -127,9 +134,9 @@ class Monitor:
             with self._lock:
                 self._organization_error = {
                     "kind": type(error).__name__,
-                    "message": "Organization discovery failed; results may be incomplete. No scope change applied.",
+                    "message": "Repository catalog discovery failed; results may be incomplete. No scope change applied.",
                 }
-            print(f"Organization discovery failed ({type(error).__name__}); no raw response logged", file=sys.stderr)
+            print(f"Repository catalog discovery failed ({type(error).__name__}); no raw response logged", file=sys.stderr)
             delay = self.config.poll_seconds
         finally:
             with self._lock:
@@ -257,7 +264,7 @@ class Monitor:
                     self._discovery_due = 0.0
                     self._next_due = 0.0
                     self._organization_report = None
-                    if self._organization:
+                    if self._organization or self._catalog_writable:
                         self._organization_due = 0.0
                     self._incident_evidence.clear()
             client = Client(token, config, self.stop_event, backoff=self._backoff)
@@ -276,7 +283,7 @@ class Monitor:
                 max_requests=min(self.config.max_requests, self.config.discovery_requests),
             ))
             report = inventory(
-                client, state=self._inventory, selected=self._selected,
+                client, state=self._inventory, selected=self._selected, writable=True,
                 deadline=time.monotonic() + self.config.discovery_seconds,
                 request_limit=min(self.config.max_requests, self.config.discovery_requests),
             )
@@ -422,6 +429,7 @@ class Monitor:
                 "rate_budget": self._backoff.snapshot(),
                 "organization_discovery": {
                     "organization": self._organization, "busy": self._organization_busy,
+                    "writable": self._catalog_writable,
                     "pending": self._organization_due != float("inf"),
                     "latest": self._organization_report, "error": self._organization_error,
                 },
