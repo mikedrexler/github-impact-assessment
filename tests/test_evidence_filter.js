@@ -65,15 +65,15 @@ test("organization hints populate independently of writable discovery and preser
   app.element("repository-names").value = "manual/repo";
   app.run(`state.organizations = {latest: {organizations:["member-org","outside-org"], complete:false,
     reason:{message:"Budget exhausted"}, errors:[]}}; renderAssessedRepositoryDropdown();`);
-  assert.deepEqual(app.element("repository-organizations").options.map(option => option.value),
-    ["manual", "member-org", "outside-org"]);
+  assert.deepEqual(app.element("repository-organization").options.map(option => option.value),
+    ["", "manual", "member-org", "outside-org", "typed-owner"]);
   assert.equal(app.element("repository-organization").value, "typed-owner");
   assert.equal(app.element("repository-names").value, "manual/repo");
   assert.match(app.element("organization-options-status").textContent, /partial/);
   assert.match(app.element("organization-options-status").textContent, /Budget exhausted/);
   assert.equal(app.element("assessed-repository").disabled, true);
   app.run(`state.organizations.latest = {organizations:[],complete:true,errors:[]}; renderAssessedRepositoryDropdown();`);
-  assert.deepEqual(app.element("repository-organizations").options.map(option => option.value), ["manual"]);
+  assert.deepEqual(app.element("repository-organization").options.map(option => option.value), ["", "manual", "typed-owner"]);
   assert.match(app.element("organization-options-status").textContent, /0 credential-visible organizations/);
 });
 
@@ -195,7 +195,7 @@ test("changing owner filter clears hidden options without changing the manual dr
   app.run(`state.organization_discovery = {writable:true,organization:"org",latest:{repositories:[{name:"org/a",write_access:true},{name:"org/b",write_access:true}]}}; renderSelection();`);
   assert.equal(app.element("assessed-repository").disabled, false);
   app.element("repository-organization").value = "other";
-  app.element("repository-organization").events.input();
+  app.element("repository-organization").events.change();
   assert.equal(app.element("assessed-repository").disabled, true);
   assert.equal(app.element("assessed-repository").options.length, 0);
   assert.equal(app.element("repository-names").value, "org/a");
@@ -215,7 +215,9 @@ test("navigation preserves tab order and discovery and dropdown share one compac
   assert.match(picker, /type="button" id="discover-organization"/);
   assert.match(picker, /id="assessed-repository"/);
   assert.match(picker, /id="assessed-repository" multiple size="6"/);
-  assert.ok(picker.indexOf('id="discover-organization"') < picker.indexOf('id="repository-organization"'));
+  assert.ok(picker.indexOf('id="repository-organization"') < picker.indexOf('id="discover-organization"'));
+  assert.match(picker, /<select id="repository-organization"/);
+  assert.doesNotMatch(picker, /repository-search|<datalist/);
   assert.match(picker, /type="button" id="select-all-repositories"[^>]* disabled/);
   assert.match(picker, />Add all filtered repositories<\/button>/);
   assert.ok(picker.indexOf('id="discover-organization"') < picker.indexOf('id="assessed-repository"'));
@@ -311,9 +313,9 @@ test("writable discovery covers any owner without applying assessment scope", as
   assert.equal(app.run("JSON.stringify(requests)"), '[["/api/writable-repositories",{}]]');
   assert.equal(app.element("repository-names").value, "other/manual");
   assert.match(app.element("selection-status").textContent, /scope is unchanged/);
-  app.element("repository-organization").value = "org/repo";
-  app.element("repository-organization").events.input();
-  assert.equal(app.element("discover-organization").disabled, false);
+  app.element("repository-organization").value = "";
+  await app.element("repository-organization").events.change();
+  assert.equal(app.element("discover-organization").disabled, true);
 });
 
 test("discovery error and empty coverage are visible, with no enabled repository picker", async () => {
@@ -401,16 +403,14 @@ test("writable picker spans all owner types, filters locally and excludes unveri
       {name:"company/readonly",write_access:false},
       {name:"company/unknown"}
     ]}}; renderSelection();`);
-  assert.deepEqual(app.element("assessed-repository").options.map(option => option.value),
-    ["company/service", "friend/collaborator", "me/personal"]);
-  app.element("repository-search").value = "collab";
-  app.element("repository-search").events.input();
+  assert.deepEqual(app.element("assessed-repository").options.map(option => option.value), []);
+  app.element("repository-organization").value = "friend";
+  app.element("repository-organization").events.change();
   assert.deepEqual(app.element("assessed-repository").options.map(option => option.value), ["friend/collaborator"]);
   app.element("select-all-repositories").events.click();
   assert.equal(app.element("repository-names").value, "friend/collaborator");
-  app.element("repository-search").value = "";
   app.element("repository-organization").value = "company";
-  app.element("repository-organization").events.input();
+  app.element("repository-organization").events.change();
   assert.deepEqual(app.element("assessed-repository").options.map(option => option.value), ["company/service"]);
   app.element("select-all-repositories").events.click();
   assert.equal(app.element("repository-names").value, "friend/collaborator\ncompany/service");
@@ -428,4 +428,45 @@ test("configuration shows verification failures rather than accepting manual nam
   assert.match(panel.children[2].textContent, /write_access_required/);
   assert.match(app.element("selection-help").textContent, /not access approval/);
   assert.equal(app.element("repository-names").value, "me/repo\norg/denied");
+});
+
+test("choosing an owner automatically queues loading once and reuses incremental catalog across owners", async () => {
+  const app = dashboard();
+  app.run(`state.selection = {repositories:["manual/saved"],limit:200};
+    state.organizations = {latest:{organizations:["org"],owners:["personal","org"],complete:true}};
+    globalThis.requests = [];
+    fetch = async (url, options) => { requests.push([url,options.method]); return {ok:true,json:async()=>({status:"accepted"})}; };
+    load = async () => { state.organization_discovery = {writable:true,pending:true,latest:null}; renderSelection(); };
+    renderSelection();`);
+  assert.equal(app.run("requests.length"), 0);
+  app.element("repository-organization").value = "personal";
+  await app.element("repository-organization").events.change();
+  assert.equal(app.run("JSON.stringify(requests)"), '[["/api/writable-repositories","POST"]]');
+  assert.equal(app.element("repository-names").value, "manual/saved");
+  app.element("repository-organization").value = "org";
+  await app.element("repository-organization").events.change();
+  assert.equal(app.run("requests.length"), 1);
+  app.run(`state.organization_discovery.latest = {complete:false,repositories:[
+    {name:"personal/private",write_access:true},{name:"org/one",write_access:true},{name:"org/denied",write_access:false}]};
+    renderSelection();`);
+  assert.deepEqual(app.element("assessed-repository").options.map(option => option.value), ["org/one"]);
+  app.element("assessed-repository").options[0].selected = true;
+  app.run(`state.organization_discovery.latest.repositories.push({name:"org/two",write_access:true});renderSelection();`);
+  assert.equal(app.element("assessed-repository").options[0].selected, true);
+  app.element("repository-organization").value = "personal";
+  await app.element("repository-organization").events.change();
+  assert.deepEqual(app.element("assessed-repository").options.map(option => option.value), ["personal/private"]);
+  assert.equal(app.run("requests.length"), 1);
+  assert.equal(app.run("JSON.stringify(state.selection.repositories)"), '["manual/saved"]');
+});
+
+test("owner dropdown retains every loaded option without UI truncation and preserves chosen owner on refresh", () => {
+  const app = dashboard();
+  app.run(`state.organizations = {latest:{organizations:[],owners:Array.from({length:2000},(_,i)=>"owner-"+i),complete:true}};
+    renderAssessedRepositoryDropdown();`);
+  assert.equal(app.element("repository-organization").options.length, 2001);
+  app.element("repository-organization").value = "owner-1999";
+  app.run(`state.organizations.latest.owners.push("new-owner");renderAssessedRepositoryDropdown();`);
+  assert.equal(app.element("repository-organization").value, "owner-1999");
+  assert.equal(app.element("repository-organization").options.length, 2002);
 });

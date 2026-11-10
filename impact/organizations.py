@@ -9,6 +9,7 @@ from .client import Client, ProbeError, organization_name
 @dataclass
 class OrganizationState:
     organizations: dict[str, str] = field(default_factory=dict)
+    owners: dict[str, str] = field(default_factory=dict)
     source: int = 0
     page: int = 1
     errors: list[dict] = field(default_factory=list)
@@ -28,6 +29,7 @@ def organizations(client: Client, state: OrganizationState, *, deadline: float, 
             if not isinstance(rows, list) or len(rows) > 100:
                 raise ProbeError("invalid_response", "Organization discovery returned an invalid page.")
             names = []
+            personal = []
             for row in rows:
                 if not isinstance(row, dict):
                     raise ProbeError("invalid_response", "Organization discovery returned an invalid entry.")
@@ -36,6 +38,10 @@ def organizations(client: Client, state: OrganizationState, *, deadline: float, 
                     if not isinstance(owner, dict) or not isinstance(owner.get("type"), str):
                         raise ProbeError("invalid_response", "Repository owner metadata is missing; organization coverage is partial.")
                     if owner["type"] != "Organization":
+                        try:
+                            personal.append(organization_name(owner.get("login")))
+                        except ValueError:
+                            raise ProbeError("invalid_response", "Repository discovery returned an invalid owner login.") from None
                         continue
                 try:
                     name = organization_name(owner.get("login") if isinstance(owner, dict) else None)
@@ -43,9 +49,14 @@ def organizations(client: Client, state: OrganizationState, *, deadline: float, 
                     raise ProbeError("invalid_response", "Organization discovery returned an invalid organization login.") from None
                 names.append(name)
             for name in names:
-                if name not in state.organizations and len(state.organizations) >= client.config.max_repositories:
+                if name not in state.owners and len(state.owners) >= client.config.max_repositories:
                     raise ProbeError("organization_limit", "Organization capacity reached; results are partial.")
                 state.organizations[name] = name
+                state.owners[name] = name
+            for name in personal:
+                if name not in state.owners and len(state.owners) >= client.config.max_repositories:
+                    raise ProbeError("organization_limit", "Owner capacity reached; results are partial.")
+                state.owners[name] = name
             state.sso_partial |= bool(getattr(client, "access_warnings", set()))
         except ProbeError as error:
             reason = {"kind": error.kind, "message": error.message}
@@ -65,6 +76,7 @@ def organizations(client: Client, state: OrganizationState, *, deadline: float, 
             state.page += 1
     return {
         "organizations": sorted(state.organizations),
+        "owners": sorted(state.owners),
         "complete": state.source == 2 and not state.errors and not state.sso_partial,
         "finished": state.source == 2 or (reason or {}).get("kind") == "organization_limit",
         "reason": reason, "errors": list(state.errors), "sso_partial": state.sso_partial,
