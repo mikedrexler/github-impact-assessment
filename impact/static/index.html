@@ -32,9 +32,10 @@
           <div class="repository-picker-controls">
             <button type="button" id="discover-organization">Find my writable repositories</button>
             <div class="repository-picker-select">
-              <label for="repository-organization">Filter by owner (optional)</label>
+              <label for="repository-organization">Organization or owner (optional)</label>
               <input id="repository-organization" list="repository-organizations" placeholder="Any personal or organization owner" autocomplete="off" spellcheck="false">
               <datalist id="repository-organizations"></datalist>
+              <p id="organization-options-status" class="muted" role="status" aria-live="polite">Loading organizations visible to the server credential...</p>
             </div>
             <div class="repository-picker-select">
               <label for="repository-search">Search repositories</label>
@@ -50,7 +51,7 @@
             <button type="button" id="select-all-repositories" aria-describedby="select-all-help" disabled>Add all filtered repositories</button>
           </div>
           <p id="assessed-repository-help" class="muted" role="status" aria-live="polite">Find repositories visible to your credential with verified write permission, or enter exact names below without discovery.</p>
-          <p id="discovery-scope-help" class="muted">Discovery is optional and uses paced, rate-limited requests. It does not change assessment scope. Owner and search filters are local only.</p>
+          <p id="discovery-scope-help" class="muted">Writable repository discovery is optional. Organization options load automatically using paced, rate-limited membership and repository-owner metadata reads. Neither changes assessment scope. Owner and search filters are local only.</p>
           <p id="select-all-help" class="muted">Add all includes only filtered results, keeping existing draft names. Partial discovery is not a complete inventory; no read-only or unknown-permission results are selectable.</p>
         </fieldset>
         <label for="repository-names">2. Selected repositories (one <code>owner/repo</code> per line, or comma-separated; add exact names or remove a name to exclude it)</label>

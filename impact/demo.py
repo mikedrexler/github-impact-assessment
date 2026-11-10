@@ -48,8 +48,11 @@ class DemoClient:
             return {"full_name": name, **fixtures[name]}
         if path.startswith("/user/repos?"):
             return [
-                {"full_name": name, **metadata} for name, metadata in fixtures.items()
+                {"full_name": name, "owner": {"login": "example", "type": "Organization"}, **metadata}
+                for name, metadata in fixtures.items()
             ]
+        if path.startswith("/user/orgs?"):
+            return [{"login": "example"}, {"login": "fixture-membership"}]
         if path.startswith("/orgs/"):
             organization = path.split("/")[2]
             return [{"full_name": name, **metadata} for name, metadata in fixtures.items()
