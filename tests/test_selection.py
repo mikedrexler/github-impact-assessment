@@ -207,7 +207,10 @@ class SelectionTests(unittest.TestCase):
         ]:
             with self.subTest(args=args), patch("sys.argv", ["impact", *args]), patch(
                 "impact.app.Monitor",
-            ) as monitor, patch("impact.app.make_server", side_effect=OSError), patch("impact.app.sys.stderr"):
+            ) as monitor, patch("impact.app.SelectionStore") as store, patch(
+                "impact.app.make_server", side_effect=OSError,
+            ), patch("impact.app.sys.stderr"):
+                store.return_value.load.return_value = ()
                 self.assertEqual(main(), 1)
                 self.assertEqual(monitor.call_args.kwargs["selected"], selected)
         for args in [["--repos", "../repo"], ["--repos", "org/repo", "--all-repositories"]]:

@@ -357,6 +357,20 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request("POST", "/api/repositories", "x" * 49153, headers)[0], 400)
         self.assertEqual(self.request("GET", "/api/repositories")[0], 404)
 
+    def test_persistence_failure_is_visible_without_changing_scope_or_exposing_path(self):
+        from impact.selection_store import SelectionStore
+
+        self.monitor._selection_store = SelectionStore()
+        before = self.monitor.snapshot()["selection"]
+        with patch.object(self.monitor._selection_store, "save", side_effect=OSError("secret-file-path")):
+            response = self.request("POST", "/api/repositories", json.dumps({
+                "mode": "selected", "repositories": ["example/queue-symptom"],
+            }), {"Content-Type": "application/json"})
+        self.assertEqual(response[0], 500)
+        self.assertIn(b"previous scope remains active", response[2])
+        self.assertNotIn(b"secret-file-path", response[2])
+        self.assertEqual(self.monitor.snapshot()["selection"], before)
+
 
 if __name__ == "__main__":
     unittest.main()

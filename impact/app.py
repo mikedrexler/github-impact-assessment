@@ -13,6 +13,7 @@ from importlib.resources import files
 from .client import Config, repository_selection
 from .demo import DemoClient
 from .monitor import Monitor
+from .selection_store import SelectionStore
 
 ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -100,8 +101,10 @@ def handler_for(monitor: Monitor):
                     status = monitor.select_repositories(data["mode"], data["repositories"])
                 except (ValueError, UnicodeDecodeError, TypeError, RecursionError):
                     return self._json(400, {"error": "Invalid selection: provide selected/all/paused mode and valid owner/repo names within the displayed limit"})
-                except (OSError, TimeoutError):
-                    return self._json(408, {"error": "Repository selection body timed out"})
+                except TimeoutError:
+                    return self._json(408, {"error": "Repository selection timed out; previous scope remains active"})
+                except OSError:
+                    return self._json(500, {"error": "Repository selection could not be read or saved; previous scope remains active. Check local storage access."})
                 return self._json(202 if status == "accepted" else 200 if status == "unchanged" else 409, {"status": status})
             if self.path not in {"/api/refresh", "/api/copilot-probe"}:
                 return self._json(404, {"error": "Not found"})
@@ -125,16 +128,18 @@ def main():
     parser.add_argument("--repos", nargs="+", metavar="OWNER/REPO", help="Start with exact repositories; skips account-wide discovery")
     parser.add_argument("--all-repositories", action="store_true", help="Opt in to credential-visible account-wide discovery")
     args = parser.parse_args()
+    selection_store = None if args.demo else SelectionStore()
     try:
         config = Config.from_env()
         if args.repos and args.all_repositories:
             parser.error("--repos and --all-repositories are mutually exclusive")
         selected = repository_selection(args.repos, config.max_repositories) if args.repos else (
-            None if args.all_repositories or args.demo else ()
+            None if args.all_repositories or args.demo else selection_store.load(config.max_repositories) if selection_store else ()
         )
-    except ValueError as error:
-        parser.error(str(error))
-    monitor = Monitor(config, client_factory=DemoClient if args.demo else None, demo=args.demo, selected=selected)
+    except (ValueError, OSError, UnicodeDecodeError, RecursionError):
+        parser.error("Invalid configuration or saved repository scope. Check settings and ~/.local/state/github-impact-assessment/repositories.json; explicit --repos or --all-repositories overrides saved scope.")
+    monitor = Monitor(config, client_factory=DemoClient if args.demo else None, demo=args.demo,
+                      selected=selected, selection_store=selection_store)
     try:
         server = make_server(monitor)
     except OSError:
