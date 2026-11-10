@@ -3,7 +3,7 @@
 import re
 from datetime import datetime, timezone
 
-from .assessment import list_data, parsed
+from .assessment import adapter_for, list_data, parsed
 from .client import ProbeError
 
 HISTORY_LIMIT = 50
@@ -28,13 +28,17 @@ def project_incidents(data: dict) -> list[dict]:
             continue
         updates = list_data(item.get("incident_updates", []))
         components = list_data(item.get("components", []))
+        action_components = [part["name"] for part in components
+                             if isinstance(part.get("name"), str) and adapter_for(part["name"]) == "actions"]
+        if not action_components:
+            continue
         result.append({
             "id": identity, "name": item.get("name", "Unnamed incident"),
             "status": item["status"],
             "started_at": item.get("started_at") or item.get("created_at"),
             "resolved_at": item.get("resolved_at"), "updated_at": item.get("updated_at"),
             "url": "https://www.githubstatus.com/incidents/" + identity,
-            "components": [part.get("name") or part.get("id", "Unknown") for part in components[:100]],
+            "components": action_components[:100],
             "updates": sorted([{
                 "at": update.get("display_at") or update.get("created_at"),
                 "status": update.get("status", "unknown"), "body": update.get("body", ""),

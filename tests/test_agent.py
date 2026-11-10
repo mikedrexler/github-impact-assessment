@@ -100,7 +100,9 @@ class AgentTests(unittest.TestCase):
             plan(target_id="../secrets"), plan(target_id=True), plan(operation=["actions_runs"]),
             plan(reason="This repository is unaffected"), plan(uncertainty="confirmed"),
             plan("actions_jobs", target_id="run1"), plan("commit_checks", target_id="run1"),
-            plan("stop"), plan("repository_metadata"), plan(repository_id="none"),
+            plan("stop"), plan("repository_metadata"), plan("commit_sample"),
+            plan("pull_request_sample"), plan("issue_sample"), plan("pages_configuration"),
+            plan(repository_id="none"),
         ]
         for value in bad_plans:
             with self.subTest(value=value):
@@ -128,7 +130,7 @@ class AgentTests(unittest.TestCase):
                 ctx.execute("actions_runs", "none", 10)
             self.assertEqual(ctx.client.calls, [])
 
-    def test_all_component_specific_reads_are_fixed_and_read_only(self):
+    def test_removed_component_operations_cannot_execute(self):
         for name, operation, path, response in [
             ("API Requests", "repository_metadata", "", {}),
             ("Git Operations", "commit_sample", "/commits?per_page=1&page=1", []),
@@ -140,10 +142,11 @@ class AgentTests(unittest.TestCase):
                 ctx = context(FixtureClient({"/repos/example/repo" + path: response}),
                               component={"id": "actions", "name": name})
                 report = report_for(MockModel(plan(operation)), ctx)
-                self.assertEqual(report["status"], "completed")
-                self.assertEqual(ctx.client.calls, ["/repos/example/repo" + path])
+                self.assertEqual(report["status"], "idle")
+                with self.assertRaises(PlannerError):
+                    ctx.execute(operation, "none", 10)
                 self.assertEqual(probe(ctx, REPO, ctx.component, SCOPED_INCIDENT, NOW)["classification"], "unknown")
-                self.assertEqual(len(ctx.client.calls), 1)
+                self.assertEqual(ctx.client.calls, [])
 
     def test_execution_revalidates_status_and_target_ids(self):
         ctx = context()
@@ -274,16 +277,16 @@ class AgentTests(unittest.TestCase):
 
     def test_assessment_fallback_and_no_status_scope_bypass(self):
         for model in [None, MockModel(plan(operation="shell")), MockModel(PlannerError("rate_limit"))]:
-            client = FixtureClient({"/user/repos?": [{"full_name": "example/repo"}], "/repos/example/repo": {}}, {
-                "components": [{"id": "api", "name": "API Requests", "status": "major_outage"}],
-                "incidents": [{**INCIDENT, "components": [{"id": "api"}]}],
+            client = FixtureClient({"/user/repos?": [{"full_name": "example/repo"}], "/actions/runs?": {"workflow_runs": []}}, {
+                "components": [COMPONENT],
+                "incidents": [{**INCIDENT, "components": [COMPONENT]}],
             })
             report = assess(client, agent=Agent(model))
             self.assertEqual(report["checks"][0]["classification"], "unknown")
             self.assertEqual(report["counts"]["confirmed"], 0)
             self.assertEqual(client.calls, [
                 "/user/repos?per_page=100&page=1&affiliation=owner,collaborator,organization_member&sort=full_name&direction=asc",
-                "/repos/example/repo",
+                "/repos/example/repo/actions/runs?per_page=30&page=1",
             ])
         model = MockModel(plan())
         report = assess(FixtureClient({"/user/repos?": []}), agent=Agent(model))

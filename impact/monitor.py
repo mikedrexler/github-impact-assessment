@@ -16,7 +16,6 @@ from .agent import Agent
 from .assessment import assess, timestamp
 from .client import Backoff, Client, Config, InventoryState, ProbeError, credentials, inventory, organization_name, repository_selection
 from .history import EVIDENCE_LIMIT, HISTORY_LIMIT, incident_order, project_incidents
-from .copilot_probe import CopilotProbe
 from .selection_store import SelectionStore
 from .observations import Observations, ObservationStore
 from .organizations import OrganizationState, organizations
@@ -26,7 +25,6 @@ class Monitor:
     def __init__(
         self, config: Config, *, client_factory: Callable | None = None,
         demo: bool = False, agent: Agent | None = None, selected: tuple[str, ...] | None = None,
-        copilot_probe: CopilotProbe | None = None,
         selection_store: SelectionStore | None = None,
         observation_store: ObservationStore | None = None,
     ):
@@ -37,8 +35,6 @@ class Monitor:
         self._observations = Observations(observation_store or ObservationStore())
         # Injected clients stay network-isolated unless a planner is also injected.
         self._agent = agent if agent is not None else Agent.from_env(demo=demo or client_factory is not None)
-        self._copilot = copilot_probe or CopilotProbe.from_env(isolated=demo or client_factory is not None)
-        self._copilot_requested = False
         self._lock = threading.Lock()
         self.stop_event = threading.Event()
         self._wake = threading.Event()
@@ -254,23 +250,6 @@ class Monitor:
             self._wake.set()
             return "accepted"
 
-    def request_copilot_probe(self) -> str:
-        with self._lock:
-            if self.stop_event.is_set():
-                return "stopped"
-            if self.demo or self._copilot.snapshot()["configuration"] != "ready":
-                return "not_configured"
-            if self._busy or self._requested or self._copilot_requested:
-                return "already_running"
-            if self._pending_selection or not self._latest or not any(
-                row["adapter"] == "copilot_model" for row in self._latest["checks"]
-            ):
-                return "no_scoped_model_incident"
-            self._copilot_requested = True
-            self._requested = True
-            self._wake.set()
-            return "accepted"
-
     def _loop(self):
         while not self.stop_event.is_set():
             self._apply_selection()
@@ -372,9 +351,6 @@ class Monitor:
 
     def _cycle(self):
         self._apply_selection()
-        with self._lock:
-            run_copilot = self._copilot_requested
-            self._copilot_requested = False
         try:
             if self._discovery_latest is None:
                 self._discover()
@@ -392,7 +368,6 @@ class Monitor:
                 found["complete"] = False
                 found["reason"] = {"kind": "discovery_error", "message": discovery_error["message"]}
             report = assess(client, self._offset, inventory_report=found, agent=self._agent,
-                            copilot_probe=self._copilot, run_copilot=run_copilot,
                             observations=self._observations, selected_names=self._selected,
                             observation_scope=hashlib.sha256(
                                 (str(self._credential_key) + "\n" + "\n".join(sorted(
@@ -476,7 +451,6 @@ class Monitor:
                 "stopped": self.stop_event.is_set(), "authentication": self._auth,
                 "next_poll_at": next_at, "server_time": timestamp(),
                 "config": asdict(self.config), "latest": self._latest,
-                "copilot_probe": self._copilot.snapshot(),
                 "rate_budget": self._backoff.snapshot(),
                 "organizations": {"busy": self._organizations_busy, "latest": self._organizations_report},
                 "organization_discovery": {

@@ -59,24 +59,14 @@
       <p id="selection-status" role="status" aria-live="polite">Loading repository scope...</p>
       <div id="selection-validation" class="panel" aria-live="polite"></div>
     </section>
-    <section class="panel" aria-labelledby="copilot-probe-title">
-      <details>
-      <summary id="copilot-probe-title">Advanced: optional Copilot inference diagnostic</summary>
-      <p>Potentially billable: sends one fixed, repository-free diagnostic prompt through the supported Copilot SDK. No tools, MCP servers, repository access or IDE automation. Not a read-only API check.</p>
-      <p class="muted">Disabled by default. Server setup requires the optional Copilot SDK, an explicit supported model, compatible CLI and a separate Copilot credential. See README. Credentials cannot be entered through this dashboard.</p>
-      <p id="copilot-probe-status" role="status" aria-live="polite">Disabled unless configured on the server.</p>
-      <button id="copilot-probe" type="button" disabled>Run one active Copilot inference check</button>
-      <p class="muted">Manual only, at most 3 attempts per rolling hour (including failed attempts), 15-second timeout; no application retries. Available only for a mapped unresolved Copilot AI Model Providers incident and assessed repositories. Billing controls must enforce any monetary/credit ceiling.</p>
-      </details>
-    </section>
     </div>
     <div id="dashboard-panel" aria-labelledby="dashboard-tab">
     <p class="muted">Manage repositories to assess in <a href="#configuration">Configuration</a>.</p>
     <section class="summary" aria-label="Assessment summary" id="summary"></section>
     <p class="principle">A status incident is not proof of tenant impact. Successful metadata reads are not proof you are unaffected. <strong>Unknown is an assessment, not an all-clear.</strong></p>
-    <section><h2>Unresolved incidents</h2><div id="incidents"></div></section>
+    <section><h2>Unresolved Actions incidents</h2><div id="incidents"></div></section>
     <section><h2>Optional AI check planner</h2><div id="agent" class="panel"></div></section>
-    <section><h2>Live Status components</h2><p class="muted">Discovered from GitHub Status. Adapter limitations remain visible even without an incident.</p><div id="components" class="grid"></div></section>
+    <section><h2>Actions status</h2><p class="muted">Only GitHub Actions is assessed. Other GitHub services are outside scope.</p><div id="components" class="grid"></div></section>
     <section><h2>Coverage &amp; freshness</h2><div id="coverage" class="panel"></div></section>
     <section>
       <h2>Continuous selected-repository observations</h2>
@@ -102,6 +92,6 @@
     <section><h2>Recent assessment history</h2><div id="history"></div></section>
     </div>
   </main>
-  <footer>Credentials stay on this server. No workflow dispatch or repository writes. Optional active Copilot inference is explicitly opt-in and potentially billable. Selected-repository aggregate observations persist locally with bounded retention; detailed assessment history is memory-only. <a href="https://www.githubstatus.com" target="_blank" rel="noreferrer">GitHub Status</a></footer>
+  <footer>Actions-only assessment. Credentials stay on this server. No workflow dispatch or repository writes. Selected-repository aggregate observations persist locally with bounded retention; detailed assessment history is memory-only. <a href="https://www.githubstatus.com" target="_blank" rel="noreferrer">GitHub Status</a></footer>
 </body>
 </html>

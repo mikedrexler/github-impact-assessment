@@ -14,7 +14,6 @@ from .client import Client, InventoryState, ProbeError, inventory, repository_pa
 
 if TYPE_CHECKING:
     from .agent import Agent
-    from .copilot_probe import CopilotProbe
     from .observations import Observations
 
 
@@ -38,28 +37,12 @@ def parsed(value: Any) -> datetime | None:
 
 def adapter_for(name: str) -> str:
     """Live IDs map incidents; names only select a conservative evidence adapter."""
-    return {
-        "actions": "actions", "git operations": "git", "api requests": "api",
-        "webhooks": "webhooks", "pull requests": "pull_requests",
-        "issues": "issues", "pages": "pages", "packages": "packages",
-        "codespaces": "codespaces", "copilot": "copilot",
-        "copilot ai model providers": "copilot_model", "github copilot": "copilot",
-    }.get(name.casefold().strip(), "unsupported")
+    return "actions" if name.casefold().strip() == "actions" else "unsupported"
 
 
 LIMITATIONS = {
     "actions": "Samples the 30 most recently created runs; first 100 jobs and first 100 check runs for at most 5 incident-time runs. No workflow execution, runner probing, logs or exhaustive history.",
-    "git": "Reads one commit reference through REST, not git clone/fetch/push. Git transport health cannot be established.",
-    "api": "Reads repository metadata. Success proves only this endpoint responded at this instant.",
-    "webhooks": "Webhook configuration/delivery reads require elevated access and can expose sensitive payloads; not inspected.",
-    "pull_requests": "Reads one open pull request; cannot test creation, merging, reviews or notifications.",
-    "issues": "Reads one issue (REST can include pull requests); cannot test creation, edits or notifications.",
-    "pages": "Reads Pages configuration only. No deployment, build, DNS or website availability test.",
-    "packages": "No uniform repository-scoped read-only probe establishes package pull/push health.",
-    "codespaces": "No codespace lifecycle operation. Repository metadata cannot establish Codespaces health.",
-    "copilot": "No meaningful tenant-level read-only inference/IDE/model-provider probe; licensing or API connectivity would not establish health.",
-    "copilot_model": "Optional manual active Copilot inference only. Shared client/model-path evidence, not a repository or IDE test. No confirmed impact or unaffected claim.",
-    "unsupported": "Unrecognized/informational live Status component: no supported read-only evidence adapter.",
+    "unsupported": "Outside the Actions-only assessment scope; no probe is performed.",
 }
 
 
@@ -176,8 +159,7 @@ def actions(client: ReadClient, repo: dict, incident: dict, row: dict, now: date
     )
 
 
-def probe(client: ReadClient, repo: dict, component: dict, incident: dict, now: datetime,
-          copilot_evidence: dict | None = None) -> dict:
+def probe(client: ReadClient, repo: dict, component: dict, incident: dict, now: datetime) -> dict:
     adapter = adapter_for(component["name"])
     row = {
         "repository": repo["name"], "repository_url": repo["url"],
@@ -187,64 +169,11 @@ def probe(client: ReadClient, repo: dict, component: dict, incident: dict, now: 
         "evidence": [], "limitations": LIMITATIONS[adapter],
         "checked_at": None, "adapter": adapter, "error_kind": None,
     }
-    if adapter == "copilot_model":
-        from .copilot_probe import FRESH_SECONDS, LIMITATION
-
-        state = copilot_evidence or {"configuration": "disabled", "status": "disabled"}
-        sample = state.get("sample")
-        row["limitations"] = LIMITATION
-        row["reason"] = f"No matching active Copilot inference sample; configuration {state['configuration']}, last request {state['status']}. Repository impact unknown."
-        if sample and incident["id"] in sample["incident_ids"]:
-            at = parsed(sample["checked_at"])
-            start = incident_start(incident)
-            fresh = bool(at and start and start <= at <= now and (now - at).total_seconds() <= FRESH_SECONDS)
-            outcome = sample["outcome"]
-            row["checked_at"] = sample["checked_at"]
-            row["evidence"].append({
-                "summary": f"Shared active Copilot SDK sample: {outcome}; requested model {sample['requested_model']}; "
-                f"actual served model not independently verified; {sample['latency_ms']} ms; sampled {sample['checked_at']}. "
-                + ("Incident-time sample, at most 5 minutes old. " if fresh else "STALE or outside incident window; not current evidence. ")
-                + "Same sample reused across selected repositories, not separate repository tests.",
-            })
-            row["reason"] = (
-                "Configured Copilot client-path inference succeeded at the sampled instant; repository impact remains unknown."
-                if fresh and outcome == "success" else
-                "Active inference did not establish current model-path health; provider attribution and repository impact remain unknown."
-            )
-            if outcome != "success":
-                row["error_kind"] = outcome
-        else:
-            row["checked_at"] = timestamp()
-        return row
-    if adapter in {"unsupported", "webhooks", "packages", "codespaces", "copilot"}:
+    if adapter != "actions":
         row["checked_at"] = timestamp()
         return row
-    if (adapter == "issues" and repo["has_issues"] is False) or (adapter == "pages" and repo["has_pages"] is False):
-        row.update(classification="not-applicable", reason=f"Repository reports {'Issues disabled' if adapter == 'issues' else 'no configured Pages site'}", checked_at=timestamp())
-        return row
-    path = repository_path(repo["name"])
-    endpoints = {
-        "git": ("/commits?per_page=1&page=1", "/commits", "Commit metadata"),
-        "api": ("", "", "Repository metadata"),
-        "pull_requests": ("/pulls?state=open&per_page=1&page=1", "/pulls", "Open pull request sample"),
-        "issues": ("/issues?state=all&per_page=1&page=1", "/issues", "Issue sample"),
-        "pages": ("/pages", "/settings/pages", "Pages configuration"),
-    }
     try:
-        if adapter == "actions":
-            actions(client, repo, incident, row, now)
-        else:
-            endpoint, suffix, description = endpoints[adapter]
-            response = client.get(path + endpoint)
-            if adapter in {"git", "pull_requests", "issues"}:
-                list_data(response)
-            else:
-                object_data(response)
-            row["evidence"].append({
-                "summary": f"{description} read succeeded; does not establish component health",
-                "url": repo["url"] + suffix,
-            })
-            row["reason"] = "Read-only sample succeeded, but cannot prove presence or absence of incident impact"
+        actions(client, repo, incident, row, now)
     except ProbeError as error:
         row["error_kind"] = error.kind
         row["reason"] = error.message + "; impact is unknown"
@@ -259,7 +188,6 @@ def probe(client: ReadClient, repo: dict, component: dict, incident: dict, now: 
 def assess(
     client: Client, offset: int = 0, inventory_state: InventoryState | None = None,
     *, inventory_report: dict | None = None, agent: Agent | None = None,
-    copilot_probe: CopilotProbe | None = None, run_copilot: bool = False,
     observations: Observations | None = None, observation_scope: str = "",
     selected_names: tuple[str, ...] | None = None,
 ) -> dict:
@@ -279,13 +207,19 @@ def assess(
         request_limit=client.config.max_requests // 2 if client.config.max_requests >= 4 else None,
         state=inventory_state,
     )
-    components = status["components"]
-    incidents = [item for item in status["incidents"] if item.get("status") not in {"resolved", "postmortem"}]
+    all_components = status["components"]
+    components = [part for part in all_components if adapter_for(part["name"]) == "actions"]
+    action_ids = {part["id"] for part in components}
+    if status_available and not components:
+        errors.append({"source": "status", "kind": "actions_component_missing",
+                       "message": "GitHub Status did not expose an Actions component; Actions coverage is unknown."})
+    incidents = [item for item in status["incidents"] if item.get("status") not in {"resolved", "postmortem"}
+                 and any(isinstance(part, dict) and part.get("id") in action_ids for part in item.get("components", []))]
     mapped = []
     for incident in incidents:
         affected = {item.get("id") for item in incident.get("components", []) if isinstance(item, dict) and isinstance(item.get("id"), str)}
         matches = [component for component in components if component["id"] in affected]
-        if not matches or affected - {component["id"] for component in matches}:
+        if affected - {component["id"] for component in all_components}:
             errors.append({
                 "source": "mapping", "kind": "unscoped_incident",
                 "message": f"Incident {incident['id']} has missing/unrecognized component IDs; scope is not inferred from its title",
@@ -313,14 +247,6 @@ def assess(
     ))
     selected_count = len({repo["name"] for repo, _, _ in tasks})
 
-    copilot_incidents = sorted({incident["id"] for _, component, incident in tasks
-                               if adapter_for(component["name"]) == "copilot_model"})
-    if run_copilot and copilot_probe:
-        if copilot_incidents and not getattr(client, "stop", threading.Event()).is_set():
-            copilot_probe.run(copilot_incidents)
-        else:
-            copilot_probe.skip()
-    copilot_evidence = copilot_probe.snapshot() if copilot_probe else None
     now = datetime.now(timezone.utc)
     contexts = [ProbeContext(client, repo, component, incident, now)
                 for repo, component, incident in tasks]
@@ -330,7 +256,7 @@ def assess(
         index, task = indexed_task
         repo, component, incident = task
         reader = contexts[index] if index < len(contexts) else client
-        return probe(reader, repo, component, incident, now, copilot_evidence)
+        return probe(reader, repo, component, incident, now)
 
     with ThreadPoolExecutor(max_workers=client.config.workers) as pool:
         rows = list(pool.map(check, enumerate(tasks)))
@@ -363,7 +289,8 @@ def assess(
         "started_at": started, "completed_at": timestamp(),
         "status_available": status_available,
         "status_updated_at": object_data(status.get("page", {})).get("updated_at"),
-        "status_description": object_data(status.get("status", {})).get("description", "Status unavailable"),
+        "status_description": ("Actions: " + ", ".join(sorted({part.get("status", "unknown") for part in components})))
+                              if components else "Actions status unavailable",
         "components": [{
             "id": component["id"], "name": component["name"],
             "status": component.get("status", "unknown"),
@@ -375,7 +302,7 @@ def assess(
             "status": item.get("status", "unknown"), "started_at": item.get("started_at") or item.get("created_at"),
             "updated_at": item.get("updated_at"),
             "url": "https://www.githubstatus.com/incidents/" + item["id"],
-            "components": [part.get("id") for part in item.get("components", []) if isinstance(part, dict)],
+            "components": [part.get("id") for part in item.get("components", []) if isinstance(part, dict) and part.get("id") in action_ids],
         } for item in incidents],
         "inventory": found, "checks": rows, "counts": counts, "errors": errors, "agent": agent_report,
         "observations": observation_report,

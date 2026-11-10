@@ -37,10 +37,7 @@ UNCERTAINTIES = {
     "no_attribution": "Evidence cannot attribute failure to GitHub.",
     "unsupported_component": "No supported probe establishes this component's health.",
 }
-OPERATIONS = (
-    "stop", "repository_metadata", "commit_sample", "pull_request_sample",
-    "issue_sample", "pages_configuration", "actions_runs", "actions_jobs", "commit_checks",
-)
+OPERATIONS = ("stop", "actions_runs", "actions_jobs", "commit_checks")
 
 
 class Plan(TypedDict):
@@ -177,14 +174,7 @@ class ProbeContext:
         }:
             return []
         adapter = adapter_for(self.component["name"])
-        if (adapter == "issues" and self.repo["has_issues"] is False) or (
-            adapter == "pages" and self.repo["has_pages"] is False
-        ):
-            return []
-        operation = {
-            "api": "repository_metadata", "git": "commit_sample", "pull_requests": "pull_request_sample",
-            "issues": "issue_sample", "pages": "pages_configuration", "actions": "actions_runs",
-        }.get(adapter)
+        operation = "actions_runs" if adapter == "actions" else None
         choices = [(operation, "none")] if operation else []
         if adapter == "actions":
             for ref, run in self.runs.items():
@@ -199,9 +189,6 @@ class ProbeContext:
             raise PlannerError("disallowed_operation")
         base = repository_path(self.repo["name"])
         paths = {
-            "repository_metadata": "", "commit_sample": "/commits?per_page=1&page=1",
-            "pull_request_sample": "/pulls?state=open&per_page=1&page=1",
-            "issue_sample": "/issues?state=all&per_page=1&page=1", "pages_configuration": "/pages",
             "actions_runs": "/actions/runs?per_page=30&page=1",
         }
         if operation in {"actions_jobs", "commit_checks"}:
@@ -252,10 +239,7 @@ class ProbeContext:
                     for row in rows
                 )
             return result
-        if operation in {"commit_sample", "pull_request_sample", "issue_sample"}:
-            return {"outcome": "sample_read", "sample_count": min(len(list_data(data)), 1)}
-        object_data(data)
-        return {"outcome": "sample_read"}
+        raise PlannerError("disallowed_operation")
 
 
 def valid_sha(value: Any) -> bool:
