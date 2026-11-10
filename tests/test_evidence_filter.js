@@ -59,6 +59,24 @@ function row(repository, component = "Actions", classification = "unknown") {
   };
 }
 
+test("organization hints populate independently of writable discovery and preserve draft and filter", () => {
+  const app = dashboard();
+  app.element("repository-organization").value = "typed-owner";
+  app.element("repository-names").value = "manual/repo";
+  app.run(`state.organizations = {latest: {organizations:["member-org","outside-org"], complete:false,
+    reason:{message:"Budget exhausted"}, errors:[]}}; renderAssessedRepositoryDropdown();`);
+  assert.deepEqual(app.element("repository-organizations").options.map(option => option.value),
+    ["manual", "member-org", "outside-org"]);
+  assert.equal(app.element("repository-organization").value, "typed-owner");
+  assert.equal(app.element("repository-names").value, "manual/repo");
+  assert.match(app.element("organization-options-status").textContent, /partial/);
+  assert.match(app.element("organization-options-status").textContent, /Budget exhausted/);
+  assert.equal(app.element("assessed-repository").disabled, true);
+  app.run(`state.organizations.latest = {organizations:[],complete:true,errors:[]}; renderAssessedRepositoryDropdown();`);
+  assert.deepEqual(app.element("repository-organizations").options.map(option => option.value), ["manual"]);
+  assert.match(app.element("organization-options-status").textContent, /0 credential-visible organizations/);
+});
+
 test("dropdown lists sorted distinct repositories with an all option", () => {
   const app = dashboard([row("org/z"), row("org/a"), row("org/z", "Pages")]);
   assert.deepEqual(app.element("evidence-repository").options.map(option => option.value), ["", "org/a", "org/z"]);

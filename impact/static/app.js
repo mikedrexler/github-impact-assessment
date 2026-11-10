@@ -54,6 +54,7 @@ function renderAssessedRepositoryDropdown() {
     ].filter(Boolean).join("\n")
     : "Find my writable repositories to browse personal, organization and collaborator access, or enter exact owner/repo names below. No discovery is required for manual entry.";
   const owners = new Set([
+    ...(state?.organizations?.latest?.organizations || []),
     ...(state?.discovery?.latest?.repositories || []).map(repo => repo.name.split("/")[0]),
     ...(state?.selection?.repositories || []).map(name => name.split("/")[0]),
     ...selectedRepositoryNames().map(name => name.split("/")[0]),
@@ -62,6 +63,16 @@ function renderAssessedRepositoryDropdown() {
   $("repository-organizations").replaceChildren(...[...owners].sort().map(owner => {
     const option = node("option", owner); option.value = owner; return option;
   }));
+  const orgs = state?.organizations;
+  const report = orgs?.latest;
+  $("organization-options-status").textContent = [
+    report ? `${report.organizations.length} credential-visible organizations loaded.` : "Loading organizations visible to the server credential...",
+    orgs?.busy ? "Organization loading in progress." : "",
+    report && !report.complete ? "Organization list is partial or still loading." : "",
+    report?.reason?.message,
+    ...(report?.errors || []).map(error => `${error.source}: ${error.message}`),
+    "Token scopes, SSO and GitHub API visibility may hide organizations. Type any exact owner if missing. Choosing an owner only filters the repository picker; it never changes assessed scope.",
+  ].filter(Boolean).join(" ");
 }
 function renderCopilotProbe() {
   const probe = state?.copilot_probe;
@@ -86,9 +97,9 @@ function renderSelection() {
     $("repository-names").value = (selection.pending?.repositories || selection.repositories).join("\n");
   }
   const description = selection.mode === "paused"
-    ? "Repository checks paused. No repository discovery requests. Choose repositories to begin; public Status polling continues."
+    ? "Repository checks paused. No assessed-repository discovery requests. Organization options load separately; public Status polling continues."
     : selection.mode === "selected"
-      ? `Saved selection: ${selection.repositories.length} repositories; only verified write-access repositories are assessed. No account-wide crawl.`
+      ? `Saved selection: ${selection.repositories.length} repositories; only verified write-access repositories are assessed. No account-wide assessment crawl.`
       : "Account-wide discovery is enabled.";
   $("selection-status").textContent = [
     description,

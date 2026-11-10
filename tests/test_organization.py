@@ -73,7 +73,7 @@ class OrganizationTests(unittest.TestCase):
         monitor.stop()
         self.assertEqual(monitor.discover_organization("other"), "stopped")
 
-    def test_scheduler_organization_discovery_single_thread_no_account_crawl(self):
+    def test_scheduler_organization_discovery_and_automatic_hints_do_not_expand_paused_scope(self):
         calls = []
 
         class Tracked(DemoClient):
@@ -85,10 +85,14 @@ class OrganizationTests(unittest.TestCase):
         monitor.start()
         try:
             wait_for(lambda: monitor.snapshot()["latest"] is not None)
+            wait_for(lambda: monitor.snapshot()["organizations"]["latest"] is not None)
             monitor.discover_organization("example")
             wait_for(lambda: monitor.snapshot()["organization_discovery"]["latest"] is not None)
             self.assertEqual(monitor.snapshot()["selection"]["mode"], "paused")
-            self.assertTrue(all(path.startswith("/orgs/example/repos?") for path in calls))
+            self.assertTrue(all(path.startswith(("/orgs/example/repos?", "/user/orgs?", "/user/repos?")) for path in calls))
+            self.assertEqual(sum(path.startswith("/user/orgs?") for path in calls), 1)
+            self.assertEqual(sum(path.startswith("/user/repos?") for path in calls), 1)
+            self.assertEqual(monitor.snapshot()["selection"]["repositories"], [])
         finally:
             monitor.stop()
 

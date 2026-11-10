@@ -19,6 +19,7 @@ from .history import EVIDENCE_LIMIT, HISTORY_LIMIT, incident_order, project_inci
 from .copilot_probe import CopilotProbe
 from .selection_store import SelectionStore
 from .observations import Observations, ObservationStore
+from .organizations import OrganizationState, organizations
 
 
 class Monitor:
@@ -74,6 +75,50 @@ class Monitor:
         self._organization_due = float("inf")
         self._organization_last_request = float("-inf")
         self._catalog_writable = False
+        self._organizations = OrganizationState()
+        self._organizations_report = None
+        self._organizations_due = 0.0
+        self._organizations_busy = False
+
+    def _load_organizations(self):
+        with self._lock:
+            self._organizations_busy = True
+        delay = self.config.poll_seconds
+        try:
+            client = self._new_client(replace(
+                self.config, cycle_seconds=self.config.discovery_seconds,
+                max_requests=min(self.config.max_requests, self.config.discovery_requests),
+            ))
+            if self._organizations_report and self._organizations_report["finished"]:
+                self._organizations = OrganizationState()
+            report = organizations(
+                client, self._organizations,
+                deadline=time.monotonic() + self.config.discovery_seconds,
+                request_limit=min(self.config.max_requests, self.config.discovery_requests),
+            )
+            reason = (report["reason"] or {}).get("kind")
+            delay = 3600 if report["finished"] else self.config.discovery_resume_seconds
+            if reason == "rate_limit":
+                with self._backoff.lock:
+                    delay = max(self.config.poll_seconds, self._backoff.until - time.monotonic())
+            elif not report["finished"] and reason and reason not in {"checkpoint", "deadline", "request_limit", "organization_limit"}:
+                delay = self.config.poll_seconds
+            report["updated_at"] = timestamp()
+            with self._lock:
+                self._organizations_report = report
+        except Exception as error:
+            with self._lock:
+                self._organizations_report = {
+                    "organizations": sorted(self._organizations.organizations), "complete": False,
+                    "finished": False, "errors": [], "reason": {
+                        "kind": type(error).__name__, "message": "Organization loading failed; results may be incomplete.",
+                    },
+                }
+            print(f"Organization loading failed ({type(error).__name__}); no raw response logged", file=sys.stderr)
+        finally:
+            with self._lock:
+                self._organizations_busy = False
+                self._organizations_due = time.monotonic() + delay
 
     def discover_writable_repositories(self) -> str:
         return self._request_catalog(None, writable=True)
@@ -235,12 +280,14 @@ class Monitor:
                     self._requested = False
             if due:
                 self._cycle()
+            elif time.monotonic() >= self._organizations_due:
+                self._load_organizations()
             elif time.monotonic() >= self._organization_due:
                 self._discover_organization()
             elif time.monotonic() >= self._discovery_due:
                 self._discover()
             with self._lock:
-                delay = max(0.01, min(self._next_due, self._discovery_due, self._organization_due) - time.monotonic())
+                delay = max(0.01, min(self._next_due, self._discovery_due, self._organization_due, self._organizations_due) - time.monotonic())
             self._wake.wait(delay)
             self._wake.clear()
 
@@ -264,6 +311,9 @@ class Monitor:
                     self._discovery_due = 0.0
                     self._next_due = 0.0
                     self._organization_report = None
+                    self._organizations = OrganizationState()
+                    self._organizations_report = None
+                    self._organizations_due = 0.0
                     if self._organization or self._catalog_writable:
                         self._organization_due = 0.0
                     self._incident_evidence.clear()
@@ -427,6 +477,7 @@ class Monitor:
                 "config": asdict(self.config), "latest": self._latest,
                 "copilot_probe": self._copilot.snapshot(),
                 "rate_budget": self._backoff.snapshot(),
+                "organizations": {"busy": self._organizations_busy, "latest": self._organizations_report},
                 "organization_discovery": {
                     "organization": self._organization, "busy": self._organization_busy,
                     "writable": self._catalog_writable,
