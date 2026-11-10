@@ -122,11 +122,11 @@ def handler_for(monitor: Monitor):
                 except OSError:
                     return self._json(500, {"error": "Repository selection could not be read or saved; previous scope remains active. Check local storage access."})
                 return self._json(202 if status == "accepted" else 200 if status == "unchanged" else 409, {"status": status})
-            if self.path not in {"/api/refresh", "/api/copilot-probe"}:
+            if self.path != "/api/refresh":
                 return self._json(404, {"error": "Not found"})
             if self.headers.get("Transfer-Encoding") or self.headers.get("Content-Length", "0") != "0":
                 return self._json(400, {"error": "This operation accepts no request body"})
-            status = monitor.request_copilot_probe() if self.path == "/api/copilot-probe" else monitor.refresh()
+            status = monitor.refresh()
             return self._json(202 if status == "accepted" else 409, {"status": status})
 
     return Handler

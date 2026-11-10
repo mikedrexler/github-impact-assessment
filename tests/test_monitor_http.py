@@ -79,7 +79,7 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(len(monitor.snapshot()["history"]), 10)
         snapshot = monitor.snapshot()
         snapshot["latest"]["checks"].clear()
-        self.assertEqual(len(monitor.snapshot()["latest"]["checks"]), 9)
+        self.assertEqual(len(monitor.snapshot()["latest"]["checks"]), 3)
 
     @patch("impact.monitor.credentials", return_value=("sentinel-private-token", "environment"))
     @patch("impact.monitor.Client")
@@ -325,14 +325,14 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request("GET", "/", headers={"Sec-Fetch-Site": "cross-site"})[0], 200)
         self.assertEqual(self.request("GET", "/", headers={"Host": "attacker.example"})[0], 403)
 
-    def test_active_probe_is_disabled_in_demo_and_rejects_all_arguments(self):
+    def test_active_probe_endpoint_is_removed(self):
         response = self.request("POST", "/api/copilot-probe")
-        self.assertEqual(response[0], 409)
-        self.assertEqual(json.loads(response[2])["status"], "not_configured")
+        self.assertEqual(response[0], 404)
+        self.assertNotIn("copilot_probe", self.monitor.snapshot())
         self.assertEqual(self.request("GET", "/api/copilot-probe")[0], 404)
         for data in ['{"model":"other"}', '{"prompt":"run shell"}', "bad"]:
-            self.assertEqual(self.request("POST", "/api/copilot-probe", body=data)[0], 400)
-        self.assertEqual(self.request("POST", "/api/copilot-probe", headers={"Transfer-Encoding": "chunked"})[0], 400)
+            self.assertEqual(self.request("POST", "/api/copilot-probe", body=data)[0], 404)
+        self.assertEqual(self.request("POST", "/api/copilot-probe", headers={"Transfer-Encoding": "chunked"})[0], 404)
 
     def test_local_refresh_only_and_no_arbitrary_routes(self):
         self.assertEqual(self.request("POST", "/api/refresh")[0], 202)

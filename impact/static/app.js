@@ -6,8 +6,6 @@ let actionMessage = "";
 let selectionDirty = false;
 let selectionSaving = false;
 let selectionMessage = "";
-let copilotMessage = "";
-let copilotSubmitting = false;
 let catalogRequested = false;
 let catalogRetryAt = 0;
 function selectedCatalogOrganization() {
@@ -86,22 +84,6 @@ function renderAssessedRepositoryDropdown() {
     report?.reason?.message,
     ...(report?.errors || []).map(error => `${error.source}: ${error.message}`),
     "All loaded owners are listed without UI truncation; scroll the dropdown to choose one. Token scopes, SSO and bounded API visibility may hide owners. For a missing owner, enter exact owner/repo names below. Choosing an owner never changes assessed scope.",
-  ].filter(Boolean).join(" ");
-}
-function renderCopilotProbe() {
-  const probe = state?.copilot_probe;
-  const scoped = (state?.latest?.checks || []).some(row => row.adapter === "copilot_model");
-  $("copilot-probe").disabled = !probe || probe.configuration !== "ready" || !scoped
-    || state.busy || state.refresh_pending || state.stopped || state.demo
-    || Boolean(state.selection?.pending) || copilotSubmitting;
-  const sample = probe?.sample;
-  const age = sample ? (Date.now() - new Date(sample.checked_at)) / 1000 : Infinity;
-  $("copilot-probe-status").textContent = [
-    `Configuration: ${probe?.configuration || "disabled"}. Last request: ${probe?.status || "not run"}.`,
-    probe?.requested_model ? `Requested model: ${probe.requested_model}.` : "",
-    sample ? `Shared sample: ${sample.outcome}, ${sample.latency_ms} ms at ${date(sample.checked_at)}${age > 300 ? " (STALE)" : ""}. Actual served model not independently verified.` : "No active inference evidence.",
-    scoped ? "Results appear in Repository evidence after the assessment finishes." : "No scoped model-provider incident; active check unavailable.",
-    copilotMessage,
   ].filter(Boolean).join(" ");
 }
 function renderSelection() {
@@ -227,7 +209,6 @@ function renderObservations() {
 }
 function render() {
   renderSelection();
-  renderCopilotProbe();
   renderObservations();
   const report = state.latest;
   const discovery = state.discovery;
@@ -351,19 +332,6 @@ $("refresh").addEventListener("click", async () => {
     const data = await response.json();
     actionMessage = response.ok ? "Read-only assessment requested." : `Refresh not started: ${data.status || data.error || "local server error"}.`;
   } catch { actionMessage = "Refresh failed: local server unreachable. No assessment confirmed."; }
-  await load();
-});
-$("copilot-probe").addEventListener("click", async () => {
-  if (copilotSubmitting) return;
-  copilotSubmitting = true;
-  renderCopilotProbe();
-  try {
-    const response = await fetch("/api/copilot-probe", {method: "POST", signal: AbortSignal.timeout(10000)});
-    const data = await response.json();
-    copilotMessage = response.ok ? "One active inference requested; this may consume Copilot credits."
-      : `Check not started: ${data.status || data.error || "local server error"}.`;
-  } catch { copilotMessage = "Request not confirmed. No automatic retry; check the latest sample before trying again."; }
-  finally { copilotSubmitting = false; }
   await load();
 });
 $("filter").addEventListener("input", () => { visible = 50; renderChecks(); });

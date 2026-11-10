@@ -8,7 +8,7 @@ function renderPast() {
   const all = historyState.incidents;
   const incidents = all.filter((item) => `${item.name} ${item.components.join(" ")} ${item.started_at} ${date(item.started_at)}`.toLowerCase().includes(query));
   $("scope").textContent = historyState.scope;
-  $("count").textContent = `Showing ${incidents.length} of ${all.length} recent resolved incidents. Dates use ${Intl.DateTimeFormat().resolvedOptions().timeZone}.`;
+  $("count").textContent = `Showing ${incidents.length} of ${all.length} recent resolved Actions incidents. Dates use ${Intl.DateTimeFormat().resolvedOptions().timeZone}.`;
   $("past-incidents").replaceChildren();
   let priorDay = "";
   for (const item of incidents) {
@@ -60,7 +60,7 @@ function renderPast() {
     card.append(timeline);
     $("past-incidents").append(card);
   }
-  if (!incidents.length) paragraph($("past-incidents"), historyState.available ? "No resolved incidents match this view in the bounded public history response." : "Incident history unavailable. See the refresh error above.", "muted");
+  if (!incidents.length) paragraph($("past-incidents"), historyState.available ? "No resolved Actions incidents match this view in the bounded public history response." : "Incident history unavailable. See the refresh error above.", "muted");
 }
 
 async function loadPast() {

@@ -50,12 +50,31 @@ def action_client(run=None, jobs=None, checks=None):
 
 
 class AssessmentTests(unittest.TestCase):
+    def test_mixed_and_non_actions_incidents_only_create_actions_checks(self):
+        client = action_client()
+        client.status_data = {
+            "components": [COMPONENT, {"id": "pages", "name": "Pages", "status": "major_outage"}],
+            "incidents": [{**INCIDENT, "components": [COMPONENT, {"id": "pages"}]},
+                          {**INCIDENT, "id": "pages-only", "components": [{"id": "pages"}]}],
+        }
+        report = assess(client, inventory_report={"repositories": [REPO], "complete": True})
+        self.assertEqual([row["adapter"] for row in report["checks"]], ["actions"])
+        self.assertEqual([part["name"] for part in report["components"]], ["Actions"])
+        self.assertEqual([item["id"] for item in report["incidents"]], ["incident"])
+        self.assertEqual(report["incidents"][0]["components"], ["actions"])
+        self.assertTrue(all("/actions/" in path or "/check-runs?" in path for path in client.calls))
+
+    def test_missing_actions_status_is_a_gap_not_all_clear(self):
+        report = assess(FixtureClient({"/user/repos?": []}))
+        self.assertFalse(report["coverage"]["complete"])
+        self.assertEqual(report["errors"][0]["kind"], "actions_component_missing")
+
     def test_all_current_component_names_and_future_fallback(self):
         expected = {
-            "Git Operations": "git", "Webhooks": "webhooks", "API Requests": "api",
-            "Issues": "issues", "Pull Requests": "pull_requests", "Actions": "actions",
-            "Packages": "packages", "Pages": "pages", "Copilot": "copilot",
-            "Codespaces": "codespaces", "Copilot AI Model Providers": "copilot_model",
+            "Git Operations": "unsupported", "Webhooks": "unsupported", "API Requests": "unsupported",
+            "Issues": "unsupported", "Pull Requests": "unsupported", "Actions": "actions",
+            "Packages": "unsupported", "Pages": "unsupported", "Copilot": "unsupported",
+            "Codespaces": "unsupported", "Copilot AI Model Providers": "unsupported",
             "Visit www.githubstatus.com for more information": "unsupported",
             "Future component": "unsupported",
         }
@@ -68,9 +87,8 @@ class AssessmentTests(unittest.TestCase):
             "incidents": [{**INCIDENT, "name": "Actions incident", "components": [{"id": "future"}]}],
         })
         report = assess(client)
-        self.assertEqual(len(report["checks"]), 1)
-        self.assertEqual(report["checks"][0]["component_id"], "future")
-        self.assertEqual(report["checks"][0]["classification"], "unknown")
+        self.assertEqual(report["checks"], [])
+        self.assertEqual(report["incidents"], [])
         self.assertFalse(any("/actions/" in path for path in client.calls))
 
     def test_no_incident_does_not_fabricate_checks(self):
@@ -114,7 +132,7 @@ class AssessmentTests(unittest.TestCase):
             "incidents": [{**INCIDENT, "components": [{"id": "missing"}]}],
         })
         report = assess(client)
-        self.assertEqual({error["kind"] for error in report["errors"]}, {"unscoped_incident", "component_without_incident"})
+        self.assertEqual({error["kind"] for error in report["errors"]}, {"component_without_incident"})
         self.assertFalse(report["coverage"]["complete"])
         self.assertEqual(report["checks"], [])
 
@@ -129,9 +147,10 @@ class AssessmentTests(unittest.TestCase):
         client = FixtureClient({"/user/repos?": [
             {"full_name": f"example/r{i}"} for i in range(3)
         ]}, {
-            "components": [{"id": "copilot", "name": "Copilot", "status": "major_outage"}],
-            "incidents": [{**INCIDENT, "components": [{"id": "copilot"}]}],
+            "components": [COMPONENT],
+            "incidents": [{**INCIDENT, "components": [COMPONENT]}],
         }, Config(max_check_repositories=2))
+        client.responses["/actions/runs?"] = {"workflow_runs": []}
         first = assess(client)
         second = assess(client, first["next_offset"])
         self.assertEqual(first["coverage"]["repositories_deferred"], 1)
@@ -142,9 +161,10 @@ class AssessmentTests(unittest.TestCase):
         client = FixtureClient({"/user/repos?": [
             {"full_name": f"example/r{i}"} for i in range(3)
         ]}, {
-            "components": [{"id": f"part{i}", "name": f"New area {i}", "status": "major_outage"} for i in range(10)],
+            "components": [{"id": f"part{i}", "name": "Actions", "status": "major_outage"} for i in range(10)],
             "incidents": [{**INCIDENT, "components": [{"id": f"part{i}"} for i in range(10)]}],
         }, Config(max_assessments=5))
+        client.responses["/actions/runs?"] = {"workflow_runs": []}
         report = assess(client)
         self.assertEqual(len(report["checks"]), 5)
         self.assertEqual(report["coverage"]["assessments_deferred"], 25)
@@ -206,7 +226,7 @@ class AssessmentTests(unittest.TestCase):
             with self.subTest(name=name):
                 row = probe(FixtureClient({suffix: response}), REPO, {"id": name, "name": name}, INCIDENT, NOW)
                 self.assertEqual(row["classification"], "unknown")
-                self.assertIn("cannot prove", row["reason"])
+                self.assertIn("Outside the Actions-only", row["reason"])
 
     def test_unsupported_probes_never_request_more_permissions(self):
         client = FixtureClient()
@@ -219,7 +239,7 @@ class AssessmentTests(unittest.TestCase):
         for name in ["Issues", "Pages"]:
             row = probe(FixtureClient(), {**REPO, "has_issues": False, "has_pages": False},
                         {"id": name, "name": name}, INCIDENT, NOW)
-            self.assertEqual(row["classification"], "not-applicable")
+            self.assertEqual(row["classification"], "unknown")
 
     def test_unknown_feature_flags_are_probed_not_disabled(self):
         client = FixtureClient({"/pages": {}, "/issues?": []})
@@ -227,7 +247,7 @@ class AssessmentTests(unittest.TestCase):
             row = probe(client, {**REPO, "has_issues": None, "has_pages": None},
                         {"id": name, "name": name}, INCIDENT, NOW)
             self.assertEqual(row["classification"], "unknown")
-        self.assertEqual(len(client.calls), 2)
+        self.assertEqual(client.calls, [])
 
     def test_probe_errors_remain_unknown(self):
         for kind in ["authentication", "permission_or_secondary_limit", "network", "rate_limit", "deadline", "service_error"]:
@@ -240,11 +260,11 @@ class AssessmentTests(unittest.TestCase):
     def test_demo_covers_queue_self_hosted_and_permissions(self):
         client = DemoClient(Config(), threading.Event())
         report = assess(client)
-        self.assertEqual(len(report["components"]), 12)
+        self.assertEqual(len(report["components"]), 1)
         self.assertEqual(report["counts"]["suspected"], 1)
         self.assertEqual(report["counts"]["confirmed"], 0)
         self.assertEqual(report["coverage"]["check_errors"], 1)
-        self.assertEqual(len(report["checks"]), 9)
+        self.assertEqual(len(report["checks"]), 3)
 
     def test_malformed_workflow_response_is_explicit(self):
         client = FixtureClient({"/actions/runs?": {"workflow_runs": "invalid"}})

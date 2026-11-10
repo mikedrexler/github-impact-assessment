@@ -17,20 +17,16 @@ class DemoClient:
 
     def status(self):
         self.requests += 1
-        names = [
-            "Git Operations", "Webhooks", "Visit www.githubstatus.com for more information",
-            "API Requests", "Issues", "Pull Requests", "Actions", "Packages", "Pages",
-            "Copilot", "Codespaces", "Copilot AI Model Providers",
-        ]
+        names = ["Actions"]
         components = [{"id": name.casefold().replace(" ", "-"), "name": name,
-                       "status": "degraded_performance" if name in {"Actions", "Pages", "Webhooks"} else "operational"} for name in names]
+                       "status": "degraded_performance"} for name in names]
         return {
-            "page": {"updated_at": self.ago(1)}, "status": {"description": "FIXTURE: Actions, Pages and Webhooks incident"},
+            "page": {"updated_at": self.ago(1)}, "status": {"description": "FIXTURE: Actions incident"},
             "components": components,
             "incidents": [{
                 "id": "demo-incident", "name": "FIXTURE: Actions queue delays",
                 "status": "investigating", "started_at": self.ago(40), "updated_at": self.ago(1),
-                "components": [part for part in components if part["name"] in {"Actions", "Pages", "Webhooks"}],
+                "components": components,
             }],
         }
 
@@ -72,8 +68,6 @@ class DemoClient:
             }]}
         if "/check-runs?" in path:
             return {"total_count": 0, "check_runs": []}
-        if path.endswith("/pages"):
-            return {"status": "built"}
         raise ProbeError("not_found_or_hidden", "Unconfigured fixture endpoint")
 
     def past_incidents(self):

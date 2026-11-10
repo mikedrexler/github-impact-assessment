@@ -38,7 +38,8 @@ class November9Tests(unittest.TestCase):
                     "/pages": {},
                 }, snapshot(update))
                 report = assess(client)
-                expected = set(update["components"]) if update["status"] != "resolved" else set()
+                action_ids = {part["id"] for part in snapshot(update)["components"] if part["name"] == "Actions"}
+                expected = set(update["components"]) & action_ids if update["status"] != "resolved" else set()
                 self.assertEqual({row["component_id"] for row in report["checks"]}, expected)
                 self.assertEqual(report["errors"], [])
                 self.assertEqual(report["counts"]["confirmed"], 0)
@@ -66,7 +67,7 @@ class November9Tests(unittest.TestCase):
         client.status_data = snapshot(FIXTURE["updates"][3])
         with patch("impact.assessment.datetime", FrozenTime):
             report = assess(client)
-        self.assertEqual(report["counts"], {"confirmed": 0, "suspected": 1, "unknown": 2, "not-applicable": 0})
+        self.assertEqual(report["counts"], {"confirmed": 0, "suspected": 1, "unknown": 0, "not-applicable": 0})
         action = next(row for row in report["checks"] if row["component"] == "Actions")
         self.assertIn("correlation only", action["reason"])
         self.assertEqual(action["incident_id"], INCIDENT["id"])
@@ -113,7 +114,7 @@ class November9Tests(unittest.TestCase):
             "/pages": {},
         }, data)
         report = assess(client)
-        self.assertEqual({row["component"] for row in report["checks"]}, {"Actions", "Pages", "Webhooks"})
+        self.assertEqual({row["component"] for row in report["checks"]}, {"Actions"})
         self.assertNotIn("API Requests", {row["component"] for row in report["checks"]})
 
 

@@ -339,21 +339,11 @@ test("discovery error and empty coverage are visible, with no enabled repository
   assert.match(app.element("assessed-repository-help").textContent, /Discovery failed/);
 });
 
-test("active inference control requires configuration and scoped incident and labels stale shared samples", () => {
-  const app = dashboard();
-  app.run("renderCopilotProbe();");
-  assert.equal(app.element("copilot-probe").disabled, true);
-  app.run(`state.copilot_probe = {configuration: "ready", status:"idle", requested_model:"fixture-model"};
-    renderCopilotProbe();`);
-  assert.equal(app.element("copilot-probe").disabled, true);
-  app.run(`state.latest.checks = [{adapter:"copilot_model"}]; renderCopilotProbe();`);
-  assert.equal(app.element("copilot-probe").disabled, false);
-  app.run(`state.busy = true; renderCopilotProbe();`);
-  assert.equal(app.element("copilot-probe").disabled, true);
-  app.run(`state.busy = false; state.copilot_probe.sample = {
-    outcome:"success", latency_ms:20, checked_at:"2020-01-01T00:00:00Z"}; renderCopilotProbe();`);
-  assert.match(app.element("copilot-probe-status").textContent, /STALE/);
-  assert.match(app.element("copilot-probe-status").textContent, /not independently verified/);
+test("dashboard is Actions-only with no active Copilot diagnostic", () => {
+  const html = readFileSync(join(__dirname, "../impact/static/index.html"), "utf8");
+  assert.match(html, /Unresolved Actions incidents/);
+  assert.match(html, /Actions status/);
+  assert.doesNotMatch(html, /copilot-probe|Copilot inference/);
 });
 
 test("configuration navigation isolates repository controls and preserves draft state", () => {
