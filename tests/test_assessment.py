@@ -55,7 +55,7 @@ class AssessmentTests(unittest.TestCase):
             "Git Operations": "git", "Webhooks": "webhooks", "API Requests": "api",
             "Issues": "issues", "Pull Requests": "pull_requests", "Actions": "actions",
             "Packages": "packages", "Pages": "pages", "Copilot": "copilot",
-            "Codespaces": "codespaces", "Copilot AI Model Providers": "copilot",
+            "Codespaces": "codespaces", "Copilot AI Model Providers": "copilot_model",
             "Visit www.githubstatus.com for more information": "unsupported",
             "Future component": "unsupported",
         }

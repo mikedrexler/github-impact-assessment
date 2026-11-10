@@ -185,10 +185,20 @@ class SelectionTests(unittest.TestCase):
 
     def test_all_scope_is_explicit_and_restores_existing_discovery(self):
         monitor = Monitor(Config(), client_factory=DemoClient, selected=())
+        self.assertFalse(monitor.snapshot()["selection"]["discovery_opted_in"])
+        monitor.select_repositories("selected", ["example/queue-symptom"])
+        monitor._cycle()
+        self.assertFalse(monitor.snapshot()["selection"]["discovery_opted_in"])
         monitor.select_repositories("all", [])
+        self.assertTrue(monitor.snapshot()["selection"]["discovery_opted_in"])
         monitor._cycle()
         self.assertEqual(monitor.snapshot()["selection"]["mode"], "all")
         self.assertEqual(monitor.snapshot()["latest"]["inventory"]["discovered"], 3)
+        monitor.select_repositories("paused", [])
+        monitor._cycle()
+        self.assertTrue(monitor.snapshot()["selection"]["discovery_opted_in"])
+        fresh = Monitor(Config(), client_factory=DemoClient, selected=())
+        self.assertFalse(fresh.snapshot()["selection"]["discovery_opted_in"])
 
     def test_cli_defaults_to_paused_and_accepts_explicit_startup_scopes(self):
         for args, selected in [

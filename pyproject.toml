@@ -12,6 +12,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["mypy>=1.15,<2"]
+copilot = ["github-copilot-sdk==1.0.29"]
 
 [project.scripts]
 github-impact-assessment = "impact.app:main"

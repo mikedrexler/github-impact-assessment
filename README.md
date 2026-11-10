@@ -1,12 +1,12 @@
 # GitHub Impact Assessment
 
-A local dashboard that polls **GitHub Status**, assesses repositories you preselect (or explicitly opt in to discover), and correlates unresolved incidents with **read-only evidence** in those repositories. It never dispatches workflows, creates canaries, or changes a monitored repository.
+A local dashboard that polls **GitHub Status**, assesses repositories you preselect (or explicitly opt in to discover), and correlates unresolved incidents with **read-only evidence** in those repositories. It never dispatches workflows or changes a monitored repository. A separate, explicitly enabled **active Copilot inference check** can provide shared client/model-path evidence; it is potentially billable and is not a read-only API probe.
 
 **Unknown is not unaffected.** A public incident is not proof of your impact, and a successful metadata read is not proof that a service works. This application deliberately cannot promise definitive impact detection for every GitHub service.
 
 ## Run
 
-Requires Python **3.11+**. The runtime and test suite use only the standard library; no dependency installation is needed.
+Requires Python **3.11+**. The default runtime and test suite use only the standard library; no dependency installation is needed. The optional active Copilot check requires the separately installed SDK described below.
 
 ```sh
 git clone https://github.com/mikedrexler/github-impact-assessment.git
@@ -27,11 +27,11 @@ Open **http://127.0.0.1:8765**. The server binds to loopback only. Leave the pro
 
 ### Preselect repositories instead of crawling organizations
 
-Normal startup **does not enumerate repositories**. Public Status polling starts, but repository checks remain paused until you open the **Configuration** tab and choose a scope in **Repositories to assess**. The **Impact assessment** tab contains results and evidence; switching tabs preserves unapplied repository edits and does not trigger discovery or assessment. The Configuration tab can be linked directly using `/#configuration`, and browser back/forward navigation is supported.
+Normal startup **does not enumerate repositories**. Public Status polling starts, but repository checks remain paused until you open the **Configuration** tab and choose a scope in **Repositories to assess**. Navigation is **Live Assessment / Past Incidents / Configuration** on both pages. Switching tabs preserves unapplied repository edits and does not trigger discovery or assessment. The Configuration tab can be linked directly using `/#configuration`, and browser back/forward navigation is supported.
 
-1. Use **Add repository to assess** to choose already-known repositories from the dropdown, or enter new exact `owner/repo` names below, one per line or comma-separated. Dropdown choices add to a draft list; remove a name from that list to exclude it. On a fresh start with no known repositories, enter names first. Populating or using the dropdown never triggers account/organization discovery.
+1. **Account-wide discovery** is at the top of Configuration. The **Add repository to assess** dropdown is greyed out until you explicitly click **Discover all accessible repositories** (or launch with `--all-repositories`). It remains disabled if discovery has not yielded any available names. Discovery opts into account-wide enumeration and assessment; apply a selected list afterward to restrict ongoing checks. Alternatively, enter exact `owner/repo` names directly, one per line or comma-separated, to avoid enumeration entirely. Dropdown choices add to a draft list; remove a name from that list to exclude it. Choosing a dropdown item does not itself trigger discovery.
 2. Click **Assess selected repositories**. The server validates only those names via `GET /repos/{owner}/{repo}` and assesses only successfully validated selected repositories when mapped incidents exist. No `/user/repos` or organization-wide enumeration occurs.
-3. Use **Pause repository checks** to stop repository discovery/probes while retaining public Status polling. Account-wide discovery is available separately under **Account-wide discovery (optional)**; it is never required to populate the selection.
+3. Use **Pause repository checks** to stop repository discovery/probes while retaining public Status polling. Discovery is optional for manually entered names. The explicit discovery opt-in is remembered for that server process, including after switching to selected/paused scope, but resets on restart. Discovery can be partial or fail because of permissions; enabling the dropdown is not a guarantee of complete account coverage.
 
 Names are deduplicated case-insensitively. URLs, paths, query strings, invalid names and selections larger than `min(IMPACT_MAX_REPOSITORIES, 200)` are rejected. The selection is **server-memory-only**, shared by tabs using that server, and clears on restart; it is not saved in browser storage or a config file. To start immediately with the same explicit list on each launch, use:
 
@@ -73,12 +73,12 @@ Installing into `.venv` does not install into a different `python3` on your PATH
 
 ## Authentication, scope and privacy
 
-- Reuse existing `gh` authentication or an already available environment token. The app does not request, create, broaden, or refresh tokens/organization permissions. GitHub tokens stay server-side, in memory, and are attached **only** to GET requests to `https://api.github.com`. Redirects are rejected. The public Status API receives no credentials. The optional AI provider uses its own separate server-side credential, described below.
+- Reuse existing `gh` authentication or an already available environment token. The app does not request, create, broaden, or refresh tokens/organization permissions. Repository-monitoring tokens stay server-side, in memory, and are attached **only** to GET requests to `https://api.github.com`. Redirects are rejected. The public Status API receives no credentials. The optional planner and active Copilot check use separate server-side credentials, described below.
 - Explicit selection reads only exact selected repository metadata and incident evidence; it does not enumerate accounts or organizations. Optional account-wide discovery paginates `GET /user/repos` with owner, collaborator and organization-member affiliations. This is the meaningful enumerable "all accessible repositories" scope, **not all public repositories on GitHub**, and not a guarantee of all repositories your user account can access. Fine-grained token selection, GitHub App identity, organization policy, SSO and permissions can silently hide repositories. Every dashboard snapshot carries its scope/access caveat. This version targets **github.com**, not GHES or `.ghe.com`.
 - Existing credentials must have access to the relevant repositories. Depending on token type, the probes need read access to metadata, Contents (commit sample), Actions runs/jobs, Checks, Issues, Pull requests and Pages. Missing access produces an explicit unknown/error; do not grant admin or write permissions just to improve this dashboard. Classic PATs/OAuth tokens may have broader scopes than needed; the application still sends GET only.
 - An SSO `partial-results` response marks enumeration partial. A 403 is labeled permission-or-secondary-limit (GitHub does not always distinguish these via headers), and a 404 can mean absent **or hidden**. SSO can also silently hide entire organizations. Authentication failures, service errors and rate limits never count as confirmed impact.
 - No request logs, workflow logs, webhook payloads, private code, repository secrets or raw error response bodies are collected. Evidence is reduced to names, timestamps, status/conclusions, counts and links. Repository names/evidence remain private data: do not expose this port, reverse proxy it, or share its API responses publicly. Any local user/process with access to loopback can read the dashboard; it is not an authenticated multi-user server.
-- No browser token, CORS, external scripts/fonts, telemetry, browser storage, or persistent assessment file. Strict Host/Origin checks mitigate cross-site refresh and DNS rebinding; a CSP blocks remote assets and framing. Browsing evidence links is user-initiated with no referrer. History contains at most 10 summary snapshots **in server memory**, cleared on restart.
+- No browser token, CORS, external scripts/fonts, application telemetry, browser storage, or persistent assessment file. Strict Host/Origin checks mitigate cross-site refresh and DNS rebinding; a CSP blocks remote assets and framing. Browsing evidence links is user-initiated with no referrer. History contains at most 10 summary snapshots **in server memory**, cleared on restart. The opt-in active check persists only its attempt timestamps for the hourly cap, not credentials or evidence.
 - The app honors the Python runtime's proxy/CA configuration. Use only a trusted local machine, proxy and Python/`gh` installation. `.env` and generated Python/package output are ignored by git. `.env.example` documents variables; the app **does not automatically load `.env` files**. Never put tokens on command lines, in source, in URLs, or in this README.
 
 ## Monitoring and bounded coverage
@@ -142,7 +142,7 @@ Environment evidence is separate from the public timeline. For up to 10 incident
 
 Current component names were inspected directly from the live [Status JSON API](https://www.githubstatus.com/api/v2/summary.json). The app discovers IDs/names on every poll; names select adapters and IDs correlate incidents. New/unrecognized names use an explicit unsupported adapter. The live feed currently includes the following components:
 
-| Status component | Actual read-only evidence | What it cannot establish |
+| Status component | Actual evidence | What it cannot establish |
 |---|---|---|
 | Actions | 30 most recent runs; first 100 jobs and first 100 commit check runs for up to 5 incident-overlapping runs per repository/incident | Exhaustive history, execution, dispatch, runner connectivity/capacity, log diagnosis, or absence of impact |
 | Git Operations | One commit reference via REST | Git clone/fetch/push transport or write availability |
@@ -154,7 +154,7 @@ Current component names were inspected directly from the live [Status JSON API](
 | Packages | Explicit unknown | Package download/upload health; no universal repository-level probe |
 | Codespaces | Explicit unknown | Provisioning, compute, connection or lifecycle health; no canary |
 | Copilot | Explicit unknown | IDE inference, chat, agent or tenant service availability |
-| Copilot AI Model Providers | Explicit unknown | Provider/model inference availability |
+| Copilot AI Model Providers | Optional manual active Copilot SDK inference; a single timestamped, requested-model client-path observation shared across selected repositories | Repository-specific or IDE impact, tenant identity, all providers/models, confirmed causation or absence of impact; defaults to unknown without configuration |
 | Visit www.githubstatus.com for more information | Explicit unsupported/informational | No tenant-level service probe |
 
 Classifications:
@@ -205,11 +205,52 @@ Opt-in sends only component adapter/status enums, an unresolved-mapped-incident 
 
 Requests set `store: false` and do not use server-side conversations. This is **not a promise of zero provider retention**: OpenAI's account/data-processing and abuse-monitoring policies still apply. Obtain any required approval before sharing even these aggregate signals. GitHub reads and provider results live only in process memory; raw model output is discarded after validation. No real provider inference is required by tests, and availability/quality for your configured model is not guaranteed. Without provider access the application continues deterministic monitoring with a visible fallback reason.
 
+## Optional active Copilot model-path check
+
+This is **separate from the AI planner** and uses the supported [GitHub Copilot SDK](https://docs.github.com/en/copilot/get-started/sdk-quickstart), not OpenAI directly or GitHub Models. The integration pins [Python SDK v1.0.29](https://github.com/github/copilot-sdk/tree/v1.0.29/python), whose `empty` mode supports explicit tool exclusion and context isolation. It is an active synthetic inference request, **not read-only**, and may consume Copilot AI credits. It does not automate your IDE. Successful SDK inference cannot establish that a VS Code or JetBrains client, another model, or every tenant user is healthy.
+
+### Setup and manual operation
+
+The optional adapter currently supports POSIX hosts (macOS/Linux) for process-group cancellation. Install into the same environment used to launch the server:
+
+```sh
+.venv/bin/python -m pip install '.[copilot]'
+# Provision a compatible Copilot CLI/runtime using the SDK's installation guide.
+# Set its absolute executable path below; this app never downloads a runtime.
+export IMPACT_COPILOT_PROBE_ENABLED=1
+export IMPACT_COPILOT_PROBE_MODEL=your-explicit-supported-model-id
+export IMPACT_COPILOT_CLI_PATH=/absolute/path/to/compatible/copilot
+# Set IMPACT_COPILOT_PROBE_TOKEN via your trusted secret manager/environment.
+.venv/bin/python run.py --repos my-org/service-api
+```
+
+`IMPACT_COPILOT_PROBE_TOKEN` must be a **separate, already-authorized Copilot credential** supported by your client/account. No fallback to `GH_TOKEN`, `GITHUB_TOKEN`, `gh`, logged-in client credentials, or the planner's OpenAI key occurs. No new permissions are acquired. Do not paste credentials into the UI, shell arguments, committed files or logs. `.env` is not loaded. There is no default model and `auto` is rejected; the explicit ID must appear in the client's model list. Policy, entitlement, model availability and SDK/CLI compatibility can still reject the request. No fallback model or BYOK/custom endpoint is selected. Enterprise managed settings are requested using the session credential and locked model constraints are enforced; conflicts or policy-bootstrap failures fail rather than bypassing policy.
+
+Open **Configuration / Copilot model-path inference**. The button is enabled only with valid server configuration, assessed repositories and a Status-mapped unresolved **Copilot AI Model Providers** incident. Press **Run one active Copilot inference check** to explicitly request a potentially billable check. It queues one fresh assessment, rechecks Status and scope, and sends nothing if the eligible incident/scope has disappeared. Normal refresh, background polling, repository selection and demo mode **never trigger inference**. The demo remains network-free. Changing model/auth settings requires a server restart.
+
+### Limits, isolation and data sharing
+
+- One fixed prompt (`Reply with exactly IMPACT_PROBE_OK. Do not use any tools.`), one SDK `send_and_wait` per accepted manual attempt, no application retries or adaptive follow-ups. This is diagnostic inference, not another incident-planning agent.
+- At most **3 attempts per rolling hour**, shared across local app instances using the same OS home. Failed, timed-out and crashed attempts count. Reservations are committed before starting the worker to `~/.local/state/github-impact-assessment/copilot-probe.sqlite3`; only attempt timestamps are saved. A short shared lease prevents overlapping workers. Storage failure or a backward clock jump fails closed. Restarting does not reset this counter; deleting it would defeat the cap.
+- **15-second worker deadline**, including SDK startup/model lookup/cleanup. An isolated POSIX process group is killed at the deadline and on worker exit, including its SDK CLI. The app does not retry timed-out requests. This bounds local execution, not completion/billing of an already accepted remote request. SDK/service internal retry behavior is not a guaranteed wire-level request count.
+- These are **request/time limits, not a monetary, token or AI-credit ceiling**. The SDK does not expose a hard output-token limit here; the tiny prompt is not a token cap. Configure Copilot-side billing/budget controls for a spend ceiling before enabling this feature. A timeout may still incur charges.
+- An empty temporary working/config/home directory, `mode="empty"`, replaced fixed system message, `available_tools=[]`, deny-all permission callback, no MCP/custom tools/agents/plugins/skills/hooks/custom instructions, no host Git operations, no session store or memory. Client/session telemetry and remote session export/control are disabled explicitly (`--disable-client-telemetry`, `--no-remote-export`). Server-side service telemetry is not controlled by these switches. The optional SDK and CLI are trusted local software, not an OS filesystem sandbox. Their compatibility must be maintained; unsupported SDK versions or CLI switches fail visibly. The app does not use a permissive CLI shell command or `--allow-all-tools`.
+- No incident text, repository name, path, source code, workflow result or assessment data enters the prompt. The Copilot service necessarily receives authentication and standard service/account metadata plus the fixed prompt/requested model. Its applicable data-processing/retention policies still apply; this is not a zero-retention promise. SDK scratch data is deleted when the worker finishes; normal completion/timeouts do not persist credentials or transcripts. As with other temporary files, an abrupt host/process crash may leave scratch artifacts for local cleanup.
+
+### Evidence and uncertainty
+
+Repository Evidence shows the sample's timestamp, requested model, latency, sanitized outcome, freshness and **shared-client-path** scope. It explicitly does **not** independently verify the actual served model or the credential's enterprise/tenant membership. Use a credential appropriate to the tenant you intend to observe. This measures a configured authenticated Copilot path, not a verified whole-tenant health result.
+
+The same sample is inherited by eligible selected repository rows; it does not pretend to run inference independently against each repository. It is reused without extra inference during polling, and is labelled stale after **5 minutes**, outside the incident window, or omitted for a different incident ID. The deterministic classifier retains **unknown** even on success or failure: success proves one response at one instant; authentication, policy, quota, network, client compatibility and provider failures cannot be distinguished reliably from a generic SDK exception. No unsupported `suspected`, `confirmed` or `unaffected` claim is introduced.
+
+Sanitized outcomes include `success`, `unexpected_response`, `model_unavailable`, `sdk_unavailable`, `unsupported_sdk`, `client_error`, `runtime_error` and `timeout`. Raw model text, SDK logs and exception bodies are never exposed. Configuration errors, `hourly_limit`, `already_running_or_cooling_down`, `budget_storage_error` and a skipped request after a scope/incident/shutdown change remain visible in Configuration. Missing SDK/credential, policy failures and unavailable models do not prevent deterministic monitoring or the existing planner fallback.
+
 ## Architecture
 
 ```text
 Browser (local static HTML/CSS/JS; no credentials)
-  -> loopback Python HTTP server: GET /api/state, GET /api/past-incidents, POST /api/refresh, POST /api/repositories
+  -> loopback Python HTTP server: GET /api/state, GET /api/past-incidents,
+     POST /api/refresh, POST /api/repositories, POST /api/copilot-probe
      -> single-flight scheduler: assessments + paced discovery-only batches
         -> cached inventory + 10-entry in-memory assessment summary history
         -> public GitHub Status summary + bounded incident history GET (no auth)
@@ -219,18 +260,22 @@ Browser (local static HTML/CSS/JS; no credentials)
         -> optional bounded AI planner (fixed OpenAI Responses origin)
            -> host-validated selections + sanitized read observations
            -> reused GET evidence; deterministic classifier owns verdicts
+        -> optional manual active Copilot check (separate credential)
+           -> persistent attempt-only counter; isolated no-tool SDK/CLI worker
+           -> shared sanitized sample; deterministic unknown repository impact
 ```
 
 - `impact/client.py`: environment/`gh` credential resolution, fixed-origin requests, explicit repository-name validation, scoped metadata reads, retry/backoff, pagination and budgets.
 - `impact/assessment.py`: live component mapping, conservative classifications and evidence projection.
 - `impact/agent.py`: optional strict-schema provider client, scoped read allowlist, sequential planner, sanitization, budgets and explicit fallback trace.
+- `impact/copilot_probe.py`: optional active Copilot SDK adapter, empty-mode isolation, manual request/time caps, local attempt ledger and sanitized shared evidence.
 - `impact/monitor.py`: independent assessment/discovery schedules on one worker, cancellation, shared backoff, rotating checks and timestamped snapshots.
 - `impact/history.py`: bounded public history projection and incident-date ordering; monitor retains separate incident-time evidence in memory.
 - `impact/app.py` and `impact/static/`: local server and responsive dashboard.
 - `run.py`: file-path launcher that resolves the bundled package independently of the current directory.
 - `impact/demo.py`: network-free incident fixtures.
 
-**No AI provider, MCP server, external database, hosted service or GitHub Actions workflow is required.** Impact classification remains deterministic Python. By default the only outbound destinations are GitHub Status and GitHub's REST API (subject to your trusted proxy settings); explicitly enabling the optional planner adds the fixed OpenAI endpoint above. There are no active checks or monitored-repository mutations. A dashboard refresh is a local scheduling operation, not a GitHub write.
+**No AI provider, MCP server, external database, hosted service or GitHub Actions workflow is required.** Impact classification remains deterministic Python. By default the only outbound destinations are GitHub Status and GitHub's REST API (subject to your trusted proxy settings); explicitly enabling the optional planner adds the fixed OpenAI endpoint above. Separately enabling and manually requesting the optional active check adds the supported client's Copilot service connections and an attempt-only local SQLite ledger. There are no monitored-repository mutations. A dashboard refresh is a local scheduling operation, not a GitHub write or paid inference request.
 
 ## Development and verification
 

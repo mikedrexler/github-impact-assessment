@@ -299,13 +299,22 @@ class HttpTests(unittest.TestCase):
             {"Origin": "null"},
             {"Sec-Fetch-Site": "cross-site"},
         ]:
-            for method, path in [("GET", "/api/state"), ("GET", "/api/past-incidents"), ("POST", "/api/refresh"), ("POST", "/api/repositories")]:
+            for method, path in [("GET", "/api/state"), ("GET", "/api/past-incidents"), ("POST", "/api/refresh"), ("POST", "/api/repositories"), ("POST", "/api/copilot-probe")]:
                 with self.subTest(headers=headers, method=method):
                     self.assertEqual(self.request(method, path, headers=headers)[0], 403)
 
     def test_static_navigation_from_other_sites_does_not_expose_data(self):
         self.assertEqual(self.request("GET", "/", headers={"Sec-Fetch-Site": "cross-site"})[0], 200)
         self.assertEqual(self.request("GET", "/", headers={"Host": "attacker.example"})[0], 403)
+
+    def test_active_probe_is_disabled_in_demo_and_rejects_all_arguments(self):
+        response = self.request("POST", "/api/copilot-probe")
+        self.assertEqual(response[0], 409)
+        self.assertEqual(json.loads(response[2])["status"], "not_configured")
+        self.assertEqual(self.request("GET", "/api/copilot-probe")[0], 404)
+        for data in ['{"model":"other"}', '{"prompt":"run shell"}', "bad"]:
+            self.assertEqual(self.request("POST", "/api/copilot-probe", body=data)[0], 400)
+        self.assertEqual(self.request("POST", "/api/copilot-probe", headers={"Transfer-Encoding": "chunked"})[0], 400)
 
     def test_local_refresh_only_and_no_arbitrary_routes(self):
         self.assertEqual(self.request("POST", "/api/refresh")[0], 202)

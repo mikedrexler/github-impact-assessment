@@ -6,3 +6,4 @@ textarea{display:block;width:100%;margin:10px 0;font:inherit;border:1px solid va
 [hidden]{display:none!important}.page-tabs{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px;border-bottom:1px solid var(--line)}.page-tabs a{padding:10px 14px;border-bottom:3px solid transparent}.page-tabs a[aria-current="page"]{border-bottom-color:var(--blue);color:var(--text);font-weight:600}.page-heading{margin-top:24px}
 @media(max-width:850px){.grid{grid-template-columns:repeat(2,1fr)}.summary{grid-template-columns:repeat(2,1fr)}header,.section-title{align-items:flex-start;flex-direction:column}#inventory{columns:2}}
 @media(max-width:500px){header,main,footer{padding:20px 16px}.grid{grid-template-columns:1fr}h1{font-size:25px}#inventory{columns:1}}
+select:disabled{color:var(--muted);background:#21262d;cursor:not-allowed}

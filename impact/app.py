@@ -103,11 +103,11 @@ def handler_for(monitor: Monitor):
                 except (OSError, TimeoutError):
                     return self._json(408, {"error": "Repository selection body timed out"})
                 return self._json(202 if status == "accepted" else 200 if status == "unchanged" else 409, {"status": status})
-            if self.path != "/api/refresh":
+            if self.path not in {"/api/refresh", "/api/copilot-probe"}:
                 return self._json(404, {"error": "Not found"})
             if self.headers.get("Transfer-Encoding") or self.headers.get("Content-Length", "0") != "0":
-                return self._json(400, {"error": "Refresh accepts no request body"})
-            status = monitor.refresh()
+                return self._json(400, {"error": "This operation accepts no request body"})
+            status = monitor.request_copilot_probe() if self.path == "/api/copilot-probe" else monitor.refresh()
             return self._json(202 if status == "accepted" else 409, {"status": status})
 
     return Handler
