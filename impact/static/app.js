@@ -44,6 +44,7 @@ function renderAssessedRepositoryDropdown() {
     dropdown.value = "";
   }
   dropdown.disabled = !optedIn || !repositories.length || selectionSaving || Boolean(state?.stopped);
+  $("select-all-repositories").disabled = dropdown.disabled;
   $("assessed-repository-help").textContent = optedIn
     ? "Choose an available repository, then click Assess selected repositories. Discovery may still be partial; names can also be entered below."
     : "Use Discover all accessible repositories to enable this dropdown, or enter exact owner/repo names below without an account-wide crawl.";
@@ -329,6 +330,22 @@ $("assessed-repository").addEventListener("change", () => {
   selectionDirty = true;
   $("assessed-repository").value = "";
   selectionMessage = "Repository added to your draft selection. Click Assess selected repositories to apply.";
+  renderSelection();
+});
+$("select-all-repositories").addEventListener("click", () => {
+  if ($("select-all-repositories").disabled) return;
+  const names = new Map(selectedRepositoryNames().map(name => [name.toLowerCase(), name]));
+  for (const option of $("assessed-repository").options) {
+    if (option.value && !names.has(option.value.toLowerCase())) names.set(option.value.toLowerCase(), option.value);
+  }
+  const limit = state.selection.limit;
+  if (names.size > limit) {
+    selectionMessage = `Cannot select all ${names.size} available repositories: the selection limit is ${limit}. Your draft is unchanged; choose individual repositories or use account-wide discovery for the broader scope.`;
+  } else {
+    $("repository-names").value = [...names.values()].join("\n");
+    selectionDirty = true;
+    selectionMessage = `${names.size} currently available repositories added to your draft. Discovery may be partial; newly discovered repositories are not added automatically. Click Assess selected repositories to apply.`;
+  }
   renderSelection();
 });
 $("repository-selection").addEventListener("submit", (event) => {
