@@ -8,6 +8,7 @@ let selectionSaving = false;
 let selectionMessage = "";
 let copilotMessage = "";
 let copilotSubmitting = false;
+let catalogRequested = false;
 function renderPage() {
   const configuration = window.location.hash === "#configuration";
   $("configuration-panel").hidden = !configuration;
@@ -23,13 +24,11 @@ function selectedRepositoryNames() {
 function renderAssessedRepositoryDropdown() {
   const dropdown = $("assessed-repository");
   const organization = $("repository-organization").value.trim().toLowerCase();
-  const query = $("repository-search").value.trim().toLowerCase();
   const discovery = state?.organization_discovery;
-  const matches = discovery?.writable === true;
+  const matches = Boolean(organization) && discovery?.writable === true;
   const known = matches ? discovery.latest?.repositories || [] : [];
   const repositories = [...new Set(known.filter(repo => repo.write_access === true).map(repo => repo.name)
-    .filter(name => (!organization || name.split("/")[0].toLowerCase() === organization)
-      && name.toLowerCase().includes(query)))].sort((a, b) => a.localeCompare(b));
+    .filter(name => name.split("/")[0].toLowerCase() === organization))].sort((a, b) => a.localeCompare(b));
   const values = repositories;
   const selected = new Set([...dropdown.options].filter(option => option.selected).map(option => option.value));
   if (JSON.stringify([...dropdown.options].map(option => option.value)) !== JSON.stringify(values)) {
@@ -43,26 +42,34 @@ function renderAssessedRepositoryDropdown() {
   dropdown.disabled = !matches || !repositories.length || selectionSaving || Boolean(state?.stopped);
   $("select-all-repositories").disabled = dropdown.disabled;
   $("add-selected-repositories").disabled = dropdown.disabled || ![...dropdown.options].some(option => option.selected);
-  $("discover-organization").disabled = selectionSaving || Boolean(state?.stopped) || Boolean(discovery?.busy);
+  $("discover-organization").disabled = !organization || selectionSaving || Boolean(state?.stopped) || Boolean(discovery?.busy);
   $("assessed-repository-help").textContent = matches
     ? [
-      `${repositories.length} writable repositories match your filters.`,
+      `${repositories.length} writable repositories for ${organization}.`,
       discovery.busy || discovery.pending ? "Discovery queued/running or waiting for continuation." : "",
       discovery.error?.message || discovery.latest?.reason?.message,
       discovery.latest?.complete ? "Bounded writable catalog traversal complete; credential/SSO restrictions may still hide repositories." : "Coverage partial or pending; missing repositories are not unaffected.",
       "Ctrl/Cmd-click or Shift to multi-select, then Add selected repositories.",
     ].filter(Boolean).join("\n")
-    : "Find my writable repositories to browse personal, organization and collaborator access, or enter exact owner/repo names below. No discovery is required for manual entry.";
+    : "Choose an organization or owner to load its writable repositories automatically, or enter exact owner/repo names below.";
   const owners = new Set([
     ...(state?.organizations?.latest?.organizations || []),
+    ...(state?.organizations?.latest?.owners || []),
+    ...(organization ? [organization] : []),
     ...(state?.discovery?.latest?.repositories || []).map(repo => repo.name.split("/")[0]),
     ...(state?.selection?.repositories || []).map(name => name.split("/")[0]),
     ...selectedRepositoryNames().map(name => name.split("/")[0]),
     ...known.map(repo => repo.name.split("/")[0]),
   ]);
-  $("repository-organizations").replaceChildren(...[...owners].sort().map(owner => {
-    const option = node("option", owner); option.value = owner; return option;
-  }));
+  const ownerDropdown = $("repository-organization");
+  const ownerValues = ["", ...new Set([...owners].map(owner => owner.toLowerCase()).sort())];
+  if (JSON.stringify([...ownerDropdown.options].map(option => option.value)) !== JSON.stringify(ownerValues)) {
+    ownerDropdown.replaceChildren(...ownerValues.map(owner => {
+      const option = node("option", owner || "Choose an organization or owner");
+      option.value = owner; return option;
+    }));
+    ownerDropdown.value = organization;
+  }
   const orgs = state?.organizations;
   const report = orgs?.latest;
   $("organization-options-status").textContent = [
@@ -71,7 +78,7 @@ function renderAssessedRepositoryDropdown() {
     report && !report.complete ? "Organization list is partial or still loading." : "",
     report?.reason?.message,
     ...(report?.errors || []).map(error => `${error.source}: ${error.message}`),
-    "Token scopes, SSO and GitHub API visibility may hide organizations. Type any exact owner if missing. Choosing an owner only filters the repository picker; it never changes assessed scope.",
+    "All loaded owners are listed without UI truncation; scroll the dropdown to choose one. Token scopes, SSO and bounded API visibility may hide owners. For a missing owner, enter exact owner/repo names below. Choosing an owner never changes assessed scope.",
   ].filter(Boolean).join(" ");
 }
 function renderCopilotProbe() {
@@ -405,8 +412,13 @@ function addPickerRepositories(all) {
   renderSelection();
 }
 $("assessed-repository").addEventListener("change", renderAssessedRepositoryDropdown);
-$("repository-organization").addEventListener("input", renderAssessedRepositoryDropdown);
-$("repository-search").addEventListener("input", renderAssessedRepositoryDropdown);
+$("repository-organization").addEventListener("change", async () => {
+  renderAssessedRepositoryDropdown();
+  if ($("repository-organization").value && !catalogRequested
+    && !(state?.organization_discovery?.writable && (state.organization_discovery.latest || state.organization_discovery.pending))) {
+    await discoverRepositories();
+  }
+});
 $("add-selected-repositories").addEventListener("click", () => addPickerRepositories(false));
 $("select-all-repositories").addEventListener("click", () => addPickerRepositories(true));
 $("repository-selection").addEventListener("submit", (event) => {
@@ -414,8 +426,9 @@ $("repository-selection").addEventListener("submit", (event) => {
   saveSelection("selected");
 });
 $("pause-repositories").addEventListener("click", () => saveSelection("paused"));
-$("discover-organization").addEventListener("click", async () => {
+async function discoverRepositories() {
   if ($("discover-organization").disabled) return;
+  catalogRequested = true;
   selectionSaving = true;
   renderSelection();
   try {
@@ -425,12 +438,14 @@ $("discover-organization").addEventListener("click", async () => {
       signal: AbortSignal.timeout(10000),
     });
     const data = await response.json();
+    catalogRequested = response.ok || data.status === "already_running";
     selectionMessage = response.ok ? "Writable repository discovery queued. Assessment scope is unchanged."
       : `Writable discovery not started: ${data.error || data.status || response.status}`;
-  } catch { selectionMessage = "Writable discovery request failed; assessment scope is unchanged."; }
-  finally { selectionSaving = false; }
+  } catch { catalogRequested = false; selectionMessage = "Writable discovery request failed; assessment scope is unchanged. Use Refresh available repositories to retry."; }
+  finally { selectionSaving = false; catalogRequested = false; }
   await load();
-});
+}
+$("discover-organization").addEventListener("click", discoverRepositories);
 window.addEventListener("hashchange", renderPage);
 renderPage();
 load();

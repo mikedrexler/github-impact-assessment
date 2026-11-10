@@ -26,6 +26,7 @@ class OrganizationTests(unittest.TestCase):
         })
         result = self.load(client)
         self.assertEqual(result["organizations"], ["empty-org", "external-org", "memberorg"])
+        self.assertEqual(result["owners"], ["empty-org", "external-org", "memberorg", "personal"])
         self.assertTrue(result["complete"])
         self.assertEqual(len(client.calls), 2)
         self.assertTrue(all(path.startswith(("/user/orgs?", "/user/repos?")) for path in client.calls))

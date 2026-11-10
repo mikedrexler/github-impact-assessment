@@ -110,6 +110,7 @@ class Monitor:
             with self._lock:
                 self._organizations_report = {
                     "organizations": sorted(self._organizations.organizations), "complete": False,
+                    "owners": sorted(self._organizations.owners),
                     "finished": False, "errors": [], "reason": {
                         "kind": type(error).__name__, "message": "Organization loading failed; results may be incomplete.",
                     },
