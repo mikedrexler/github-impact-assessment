@@ -41,7 +41,7 @@ function dashboard(checks = []) {
   vm.runInContext(readFileSync(join(__dirname, "../impact/static/ui.js"), "utf8"), context);
   vm.runInContext(readFileSync(join(__dirname, "../impact/static/app.js"), "utf8"), context);
   context.testRows = checks;
-  vm.runInContext("state = {latest: {checks: testRows, incidents: [{}]}}; renderChecks();", context);
+  vm.runInContext('state = {organizations:{latest:{organizations:["org"]}},latest: {checks: testRows, incidents: [{}]}}; renderChecks();', context);
   return {
     element: document.getElementById,
     run: (script) => vm.runInContext(script, context),
@@ -439,22 +439,24 @@ test("configuration shows verification failures rather than accepting manual nam
   assert.equal(app.element("repository-names").value, "me/repo\norg/denied");
 });
 
-test("choosing an owner automatically queues loading once and reuses incremental catalog across owners", async () => {
+test("choosing an organization replaces account-wide loading with its own scoped catalog", async () => {
   const app = dashboard();
   app.run(`state.selection = {repositories:["manual/saved"],limit:200};
     state.organizations = {latest:{organizations:["org"],owners:["personal","org"],complete:true}};
     globalThis.requests = [];
-    fetch = async (url, options) => { requests.push([url,options.method]); return {ok:true,json:async()=>({status:"accepted"})}; };
+    fetch = async (url, options) => { requests.push([url,JSON.parse(options.body)]); return {ok:true,json:async()=>({status:"accepted"})}; };
     load = async () => { state.organization_discovery = {writable:true,pending:true,latest:null}; renderSelection(); };
     renderSelection();`);
   assert.equal(app.run("requests.length"), 0);
   app.element("repository-organization").value = "personal";
   await app.element("repository-organization").events.change();
-  assert.equal(app.run("JSON.stringify(requests)"), '[["/api/writable-repositories","POST"]]');
+  assert.equal(app.run("JSON.stringify(requests)"), '[["/api/writable-repositories",{}]]');
   assert.equal(app.element("repository-names").value, "manual/saved");
   app.element("repository-organization").value = "org";
   await app.element("repository-organization").events.change();
-  assert.equal(app.run("requests.length"), 1);
+  assert.equal(app.run("requests.length"), 2);
+  assert.equal(app.run("JSON.stringify(requests[1])"), '["/api/writable-repositories",{"organization":"org"}]');
+  app.run(`state.organization_discovery.organization = "org";`);
   app.run(`state.organization_discovery.latest = {complete:false,repositories:[
     {name:"personal/private",write_access:true},{name:"org/one",write_access:true},{name:"org/denied",write_access:false}]};
     renderSelection();`);
@@ -464,8 +466,8 @@ test("choosing an owner automatically queues loading once and reuses incremental
   assert.equal(app.element("assessed-repository").options[0].selected, true);
   app.element("repository-organization").value = "personal";
   await app.element("repository-organization").events.change();
-  assert.deepEqual(app.element("assessed-repository").options.map(option => option.value), ["personal/private"]);
-  assert.equal(app.run("requests.length"), 1);
+  assert.deepEqual(app.element("assessed-repository").options.map(option => option.value), []);
+  assert.equal(app.run("requests.length"), 3);
   assert.equal(app.run("JSON.stringify(state.selection.repositories)"), '["manual/saved"]');
 });
 
@@ -504,4 +506,32 @@ test("owner changes repopulate empty and cached results without adding hidden se
     load = async () => renderSelection();`);
   await app.element("repository-organization").events.change();
   assert.equal(app.run("retries"), 1);
+});
+
+test("Octodemo selection waits out busy or throttled old catalog and never displays stale results", async () => {
+  const app = dashboard();
+  app.element("repository-organization").value = "octodemo";
+  app.run(`state.selection={repositories:["manual/saved"],limit:200};
+    state.organizations={latest:{organizations:["octodemo"],owners:["octodemo"]}};
+    state.organization_discovery={writable:true,organization:null,busy:true,pending:true,
+      latest:{repositories:[{name:"octodemo/stale",write_access:true}]}};
+    globalThis.requests=[];
+    fetch=async (url,options)=>{requests.push(JSON.parse(options.body));return {ok:false,json:async()=>({status:"throttled"})};};
+    load=async()=>renderSelection();`);
+  await app.element("repository-organization").events.change();
+  assert.equal(app.run("requests.length"), 0);
+  assert.equal(app.element("assessed-repository").options.length, 0);
+  app.run("state.organization_discovery.busy=false;");
+  await app.run("ensureOwnerCatalog()");
+  assert.equal(app.run("JSON.stringify(requests)"), '[{"organization":"octodemo"}]');
+  await app.run("ensureOwnerCatalog()");
+  assert.equal(app.run("requests.length"), 1);
+  app.run(`catalogRetryAt=0;fetch=async(url,options)=>{requests.push(JSON.parse(options.body));return {ok:true,json:async()=>({status:"accepted"})};};`);
+  await app.run("ensureOwnerCatalog()");
+  assert.equal(app.run("requests.length"), 2);
+  app.run(`state.organization_discovery={organization:"octodemo",writable:true,pending:true,
+    latest:{repositories:[{name:"octodemo/first-page",write_access:true},{name:"other/repo",write_access:true}]}};
+    renderSelection();`);
+  assert.deepEqual(app.element("assessed-repository").options.map(option=>option.value), ["octodemo/first-page"]);
+  assert.equal(app.element("repository-names").value, "manual/saved");
 });

@@ -9,6 +9,15 @@ let selectionMessage = "";
 let copilotMessage = "";
 let copilotSubmitting = false;
 let catalogRequested = false;
+let catalogRetryAt = 0;
+function selectedCatalogOrganization() {
+  const owner = $("repository-organization").value.toLowerCase();
+  return (state?.organizations?.latest?.organizations || []).includes(owner) ? owner : null;
+}
+function catalogMatchesOwner() {
+  const discovery = state?.organization_discovery;
+  return discovery?.writable === true && (discovery.organization || null) === selectedCatalogOrganization();
+}
 function renderPage() {
   const configuration = window.location.hash === "#configuration";
   $("configuration-panel").hidden = !configuration;
@@ -25,7 +34,7 @@ function renderAssessedRepositoryDropdown() {
   const dropdown = $("assessed-repository");
   const organization = $("repository-organization").value.trim().toLowerCase();
   const discovery = state?.organization_discovery;
-  const matches = Boolean(organization) && discovery?.writable === true;
+  const matches = Boolean(organization) && catalogMatchesOwner();
   const known = matches ? discovery.latest?.repositories || [] : [];
   const repositories = [...new Set(known.filter(repo => repo.write_access === true).map(repo => repo.name)
     .filter(name => name.split("/")[0].toLowerCase() === organization))].sort((a, b) => a.localeCompare(b));
@@ -411,14 +420,18 @@ function addPickerRepositories() {
 }
 $("assessed-repository").addEventListener("change", renderAssessedRepositoryDropdown);
 $("repository-organization").addEventListener("change", async () => {
+  catalogRetryAt = 0;
   renderAssessedRepositoryDropdown();
+  await ensureOwnerCatalog();
+});
+async function ensureOwnerCatalog() {
   const discovery = state?.organization_discovery;
-  if ($("repository-organization").value && !catalogRequested
-    && !(discovery?.writable && (discovery.busy || discovery.pending
+  if ($("repository-organization").value && !catalogRequested && Date.now() >= catalogRetryAt
+    && !(catalogMatchesOwner() && (discovery.busy || discovery.pending
       || (discovery.latest && !discovery.error && !discovery.latest.reason)))) {
     await discoverRepositories();
   }
-});
+}
 $("add-selected-repositories").addEventListener("click", addPickerRepositories);
 $("repository-selection").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -428,12 +441,13 @@ $("pause-repositories").addEventListener("click", () => saveSelection("paused"))
 async function discoverRepositories() {
   if (!$("repository-organization").value || catalogRequested || selectionSaving || state?.stopped || state?.organization_discovery?.busy) return;
   catalogRequested = true;
+  catalogRetryAt = Date.now() + 10000;
   selectionSaving = true;
   renderSelection();
   try {
     const response = await fetch("/api/writable-repositories", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({}),
+      body: JSON.stringify(selectedCatalogOrganization() ? {organization:selectedCatalogOrganization()} : {}),
       signal: AbortSignal.timeout(10000),
     });
     const data = await response.json();
@@ -447,4 +461,4 @@ async function discoverRepositories() {
 window.addEventListener("hashchange", renderPage);
 renderPage();
 load();
-setInterval(load, 5000);
+setInterval(async () => { await load(); await ensureOwnerCatalog(); }, 5000);

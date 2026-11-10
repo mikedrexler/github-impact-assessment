@@ -256,9 +256,18 @@ class HttpTests(unittest.TestCase):
         headers = {"Content-Type": "application/json"}
         self.assertEqual(self.request("POST", "/api/writable-repositories", "{}", headers)[0], 202)
         self.assertEqual(self.monitor.snapshot()["selection"], before)
-        for data in [[], None, {"owner": "org"}, {"url": "https://evil"}, {"mode": "all"}]:
+        for data in [[], None, {"owner": "org"}, {"url": "https://evil"}, {"mode": "all"},
+                     {"organization": None}, {"organization": "bad/path"}, {"organization": "org", "extra": True}]:
             self.assertEqual(self.request("POST", "/api/writable-repositories", json.dumps(data), headers)[0], 400)
         self.assertEqual(self.request("GET", "/api/writable-repositories")[0], 404)
+
+    def test_writable_catalog_accepts_exact_organization(self):
+        before = self.monitor.snapshot()["selection"]
+        status, _, _ = self.request("POST", "/api/writable-repositories", '{"organization":"Octodemo"}',
+                                 {"Content-Type": "application/json"})
+        self.assertEqual(status, 202)
+        self.assertEqual(self.monitor.snapshot()["organization_discovery"]["organization"], "octodemo")
+        self.assertEqual(self.monitor.snapshot()["selection"], before)
 
     def setUp(self):
         # Port zero is used only by tests, not accepted in user environment config.
