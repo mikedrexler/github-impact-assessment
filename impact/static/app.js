@@ -40,9 +40,7 @@ function renderAssessedRepositoryDropdown() {
     }));
   }
   dropdown.disabled = !matches || !repositories.length || selectionSaving || Boolean(state?.stopped);
-  $("select-all-repositories").disabled = dropdown.disabled;
   $("add-selected-repositories").disabled = dropdown.disabled || ![...dropdown.options].some(option => option.selected);
-  $("discover-organization").disabled = !organization || selectionSaving || Boolean(state?.stopped) || Boolean(discovery?.busy);
   $("assessed-repository-help").textContent = matches
     ? [
       `${repositories.length} writable repositories for ${organization}.`,
@@ -127,7 +125,7 @@ function renderSelection() {
   }
   if (validation && !validation.complete && validation.reason) paragraph(validationPanel, `Partial verification: ${validation.reason.message}`, "warning");
   paragraph(validationPanel, "Permissions reflect the configured GitHub credential, not necessarily your browser account. Rechecked during metadata validation; complete selections are revalidated hourly. Revocations or credential restrictions can produce coverage gaps.", "muted");
-  for (const id of ["apply-repositories", "pause-repositories", "discover-organization"]) {
+  for (const id of ["apply-repositories", "pause-repositories"]) {
     $(id).disabled = selectionSaving || state.stopped;
   }
   renderAssessedRepositoryDropdown();
@@ -395,11 +393,11 @@ $("repository-names").addEventListener("input", () => {
   selectionDirty = true;
   renderAssessedRepositoryDropdown();
 });
-function addPickerRepositories(all) {
-  if ($(all ? "select-all-repositories" : "add-selected-repositories").disabled) return;
+function addPickerRepositories() {
+  if ($("add-selected-repositories").disabled) return;
   const names = new Map(selectedRepositoryNames().map(name => [name.toLowerCase(), name]));
   for (const option of $("assessed-repository").options) {
-    if ((all || option.selected) && option.value && !names.has(option.value.toLowerCase())) names.set(option.value.toLowerCase(), option.value);
+    if (option.selected && option.value && !names.has(option.value.toLowerCase())) names.set(option.value.toLowerCase(), option.value);
   }
   const limit = state.selection.limit;
   if (names.size > limit) {
@@ -414,20 +412,21 @@ function addPickerRepositories(all) {
 $("assessed-repository").addEventListener("change", renderAssessedRepositoryDropdown);
 $("repository-organization").addEventListener("change", async () => {
   renderAssessedRepositoryDropdown();
+  const discovery = state?.organization_discovery;
   if ($("repository-organization").value && !catalogRequested
-    && !(state?.organization_discovery?.writable && (state.organization_discovery.latest || state.organization_discovery.pending))) {
+    && !(discovery?.writable && (discovery.busy || discovery.pending
+      || (discovery.latest && !discovery.error && !discovery.latest.reason)))) {
     await discoverRepositories();
   }
 });
-$("add-selected-repositories").addEventListener("click", () => addPickerRepositories(false));
-$("select-all-repositories").addEventListener("click", () => addPickerRepositories(true));
+$("add-selected-repositories").addEventListener("click", addPickerRepositories);
 $("repository-selection").addEventListener("submit", (event) => {
   event.preventDefault();
   saveSelection("selected");
 });
 $("pause-repositories").addEventListener("click", () => saveSelection("paused"));
 async function discoverRepositories() {
-  if ($("discover-organization").disabled) return;
+  if (!$("repository-organization").value || catalogRequested || selectionSaving || state?.stopped || state?.organization_discovery?.busy) return;
   catalogRequested = true;
   selectionSaving = true;
   renderSelection();
@@ -441,11 +440,10 @@ async function discoverRepositories() {
     catalogRequested = response.ok || data.status === "already_running";
     selectionMessage = response.ok ? "Writable repository discovery queued. Assessment scope is unchanged."
       : `Writable discovery not started: ${data.error || data.status || response.status}`;
-  } catch { catalogRequested = false; selectionMessage = "Writable discovery request failed; assessment scope is unchanged. Use Refresh available repositories to retry."; }
+  } catch { catalogRequested = false; selectionMessage = "Writable discovery request failed; assessment scope is unchanged. Choose an owner again to retry."; }
   finally { selectionSaving = false; catalogRequested = false; }
   await load();
 }
-$("discover-organization").addEventListener("click", discoverRepositories);
 window.addEventListener("hashchange", renderPage);
 renderPage();
 load();
