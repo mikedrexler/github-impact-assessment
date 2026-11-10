@@ -22,32 +22,44 @@ function selectedRepositoryNames() {
 }
 function renderAssessedRepositoryDropdown() {
   const dropdown = $("assessed-repository");
-  const optedIn = Boolean(state?.selection?.discovery_opted_in);
-  const known = state?.discovery?.latest?.repositories || state?.latest?.inventory?.repositories || [];
-  const names = new Map();
-  for (const name of [
-    ...known.map((repo) => repo.name), ...(state?.selection?.repositories || []),
-    ...(state?.selection?.pending?.repositories || []), ...selectedRepositoryNames(),
-  ]) {
-    names.set(name.toLowerCase(), name);
-  }
-  const repositories = [...names.values()].sort((a, b) => a.localeCompare(b));
-  const placeholder = !optedIn ? "Run account-wide discovery first"
-    : repositories.length ? "Choose a repository..." : "Discovery in progress or no repositories available";
-  const values = ["", ...repositories];
-  if (dropdown.options[0]?.textContent !== placeholder || JSON.stringify([...dropdown.options].map((option) => option.value)) !== JSON.stringify(values)) {
+  const organization = $("repository-organization").value.trim().toLowerCase();
+  const discovery = state?.organization_discovery;
+  const matches = Boolean(organization && discovery?.organization === organization);
+  const known = matches ? discovery.latest?.repositories || [] : [];
+  const repositories = [...new Set(known.map(repo => repo.name)
+    .filter(name => name.split("/")[0].toLowerCase() === organization))].sort((a, b) => a.localeCompare(b));
+  const values = repositories;
+  const selected = new Set([...dropdown.options].filter(option => option.selected).map(option => option.value));
+  if (JSON.stringify([...dropdown.options].map(option => option.value)) !== JSON.stringify(values)) {
     dropdown.replaceChildren(...values.map((name) => {
-      const option = node("option", name || placeholder);
+      const option = node("option", name);
       option.value = name;
+      option.selected = selected.has(name);
       return option;
     }));
-    dropdown.value = "";
   }
-  dropdown.disabled = !optedIn || !repositories.length || selectionSaving || Boolean(state?.stopped);
+  dropdown.disabled = !matches || !repositories.length || selectionSaving || Boolean(state?.stopped);
   $("select-all-repositories").disabled = dropdown.disabled;
-  $("assessed-repository-help").textContent = optedIn
-    ? "Choose an available repository, then click Assess selected repositories. Discovery may still be partial; names can also be entered below."
-    : "Use Discover all accessible repositories to enable this dropdown, or enter exact owner/repo names below without an account-wide crawl.";
+  $("add-selected-repositories").disabled = dropdown.disabled || ![...dropdown.options].some(option => option.selected);
+  $("discover-organization").disabled = selectionSaving || Boolean(state?.stopped) || Boolean(discovery?.busy)
+    || !/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(organization);
+  $("assessed-repository-help").textContent = matches
+    ? [
+      `${repositories.length} repositories available for ${organization}.`,
+      discovery.busy || discovery.pending ? "Discovery queued/running or waiting for continuation." : "",
+      discovery.error?.message || discovery.latest?.reason?.message,
+      discovery.latest?.complete ? "Bounded organization traversal complete; permissions may still hide repositories." : "Coverage partial or pending; missing repositories are not unaffected.",
+      "Ctrl/Cmd-click or Shift to multi-select, then Add selected repositories.",
+    ].filter(Boolean).join("\n")
+    : "Choose an exact organization login and discover its repositories first. No account-wide enumeration is needed.";
+  const owners = new Set([
+    ...(state?.discovery?.latest?.repositories || []).map(repo => repo.name.split("/")[0]),
+    ...(state?.selection?.repositories || []).map(name => name.split("/")[0]),
+    ...selectedRepositoryNames().map(name => name.split("/")[0]),
+  ]);
+  $("repository-organizations").replaceChildren(...[...owners].sort().map(owner => {
+    const option = node("option", owner); option.value = owner; return option;
+  }));
 }
 function renderCopilotProbe() {
   const probe = state?.copilot_probe;
@@ -84,7 +96,7 @@ function renderSelection() {
   $("selection-help").textContent = `Up to ${selection.limit} exact owner/repo names. ${selection.persistent
     ? "Applied scope is saved on this server and restored after restart; unapplied drafts are not saved. Startup --repos or --all-repositories overrides saved scope."
     : "This demo/test selection is memory-only and clears on restart."}`;
-  for (const id of ["apply-repositories", "pause-repositories", "all-repositories"]) {
+  for (const id of ["apply-repositories", "pause-repositories", "discover-organization"]) {
     $(id).disabled = selectionSaving || state.stopped;
   }
   renderAssessedRepositoryDropdown();
@@ -322,40 +334,48 @@ $("repository-names").addEventListener("input", () => {
   selectionDirty = true;
   renderAssessedRepositoryDropdown();
 });
-$("assessed-repository").addEventListener("change", () => {
-  if ($("assessed-repository").disabled) return;
-  const name = $("assessed-repository").value;
-  if (!name) return;
-  const names = selectedRepositoryNames();
-  if (!names.some((existing) => existing.toLowerCase() === name.toLowerCase())) names.push(name);
-  $("repository-names").value = names.join("\n");
-  selectionDirty = true;
-  $("assessed-repository").value = "";
-  selectionMessage = "Repository added to your draft selection. Click Assess selected repositories to apply.";
-  renderSelection();
-});
-$("select-all-repositories").addEventListener("click", () => {
-  if ($("select-all-repositories").disabled) return;
+function addPickerRepositories(all) {
+  if ($(all ? "select-all-repositories" : "add-selected-repositories").disabled) return;
   const names = new Map(selectedRepositoryNames().map(name => [name.toLowerCase(), name]));
   for (const option of $("assessed-repository").options) {
-    if (option.value && !names.has(option.value.toLowerCase())) names.set(option.value.toLowerCase(), option.value);
+    if ((all || option.selected) && option.value && !names.has(option.value.toLowerCase())) names.set(option.value.toLowerCase(), option.value);
   }
   const limit = state.selection.limit;
   if (names.size > limit) {
-    selectionMessage = `Cannot select all ${names.size} available repositories: the selection limit is ${limit}. Your draft is unchanged; choose individual repositories or use account-wide discovery for the broader scope.`;
+    selectionMessage = `Cannot add ${names.size} repositories: the selection limit is ${limit}. Your draft is unchanged; choose fewer repositories.`;
   } else {
     $("repository-names").value = [...names.values()].join("\n");
     selectionDirty = true;
-    selectionMessage = `${names.size} currently available repositories added to your draft. Discovery may be partial; newly discovered repositories are not added automatically. Click Assess selected repositories to apply.`;
+    selectionMessage = `Draft now contains ${names.size} repositories. Discovery may be partial; newly discovered repositories are not added automatically. Click Assess selected repositories to apply.`;
   }
   renderSelection();
-});
+}
+$("assessed-repository").addEventListener("change", renderAssessedRepositoryDropdown);
+$("repository-organization").addEventListener("input", renderAssessedRepositoryDropdown);
+$("add-selected-repositories").addEventListener("click", () => addPickerRepositories(false));
+$("select-all-repositories").addEventListener("click", () => addPickerRepositories(true));
 $("repository-selection").addEventListener("submit", (event) => {
   event.preventDefault();
   saveSelection("selected");
 });
 $("pause-repositories").addEventListener("click", () => saveSelection("paused"));
-$("all-repositories").addEventListener("click", () => saveSelection("all"));
+$("discover-organization").addEventListener("click", async () => {
+  if ($("discover-organization").disabled) return;
+  selectionSaving = true;
+  renderSelection();
+  try {
+    const response = await fetch("/api/organization", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({organization: $("repository-organization").value.trim()}),
+      signal: AbortSignal.timeout(10000),
+    });
+    const data = await response.json();
+    selectionMessage = response.ok ? "Organization discovery queued. Assessment scope is unchanged."
+      : `Organization discovery not started: ${data.error || data.status || response.status}`;
+  } catch { selectionMessage = "Organization discovery request failed; assessment scope is unchanged."; }
+  finally { selectionSaving = false; }
+  await load();
+});
 window.addEventListener("hashchange", renderPage);
 renderPage();
 load();

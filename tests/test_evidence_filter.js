@@ -127,52 +127,60 @@ test("repository option labels are plain text, never HTML", () => {
   assert.equal(app.element("evidence-repository").options[1].value, name);
 });
 
-test("assessed repository dropdown uses known scope without requiring incident evidence", () => {
+test("organization multi-select adds chosen results only on explicit Add", () => {
   const app = dashboard();
+  app.element("repository-organization").value = "org";
   app.run(`state.selection = {repositories: ["org/a"], pending: null, limit: 200, discovery_opted_in: true};
-    state.discovery = {latest: {repositories: [{name:"org/a"}, {name:"org/b"}]}};
+    state.organization_discovery = {organization:"org", latest: {repositories: [{name:"org/a"}, {name:"org/b"}, {name:"other/hidden"}]}};
     renderSelection();`);
-  assert.deepEqual(app.element("assessed-repository").options.map(option => option.value), ["", "org/a", "org/b"]);
-  app.element("assessed-repository").value = "org/b";
+  assert.deepEqual(app.element("assessed-repository").options.map(option => option.value), ["org/a", "org/b"]);
+  app.element("assessed-repository").options[1].selected = true;
   app.element("assessed-repository").events.change();
+  assert.equal(app.element("repository-names").value, "org/a");
+  app.element("add-selected-repositories").events.click();
   assert.equal(app.element("repository-names").value, "org/a\norg/b");
-  assert.match(app.element("selection-status").textContent, /draft selection/);
+  assert.match(app.element("selection-status").textContent, /Draft now contains 2/);
   assert.equal(app.run("state.selection.repositories.length"), 1);
   assert.equal(app.run("selectionDirty"), true);
   app.run("renderSelection();");
   assert.equal(app.element("repository-names").value, "org/a\norg/b");
 });
 
-test("assessed dropdown avoids duplicates and supports manually entered repository names", () => {
+test("manual entry does not bypass organization discovery and multi-selection survives refresh", () => {
   const app = dashboard();
   app.run('state.selection = {repositories: [], pending: null, limit: 200, discovery_opted_in: true}; renderSelection();');
   assert.equal(app.element("assessed-repository").disabled, true);
   app.element("repository-names").value = "Org/Repo";
   app.element("repository-names").events.input();
-  assert.equal(app.element("assessed-repository").disabled, false);
-  assert.deepEqual(app.element("assessed-repository").options.map(option => option.value), ["", "Org/Repo"]);
-  app.element("assessed-repository").value = "org/repo";
+  assert.equal(app.element("assessed-repository").disabled, true);
+  app.element("repository-organization").value = "org";
+  app.run(`state.organization_discovery = {organization:"org", latest:{repositories:[{name:"org/repo"}]}}; renderSelection();`);
+  app.element("assessed-repository").options[0].selected = true;
   app.element("assessed-repository").events.change();
+  app.run("renderSelection();");
+  assert.equal(app.element("assessed-repository").options[0].selected, true);
+  app.element("add-selected-repositories").events.click();
   assert.equal(app.element("repository-names").value, "Org/Repo");
   app.run("selectionSaving = true; renderAssessedRepositoryDropdown();");
   assert.equal(app.element("assessed-repository").disabled, true);
 });
 
-test("dropdown stays greyed out before discovery even with known and manually entered repositories", () => {
+test("changing organization clears old options without changing the manual draft", () => {
   const app = dashboard();
+  app.element("repository-organization").value = "org";
   app.run(`state.selection = {repositories: ["org/a"], pending: null, limit: 200, discovery_opted_in: false};
     state.discovery = {latest: {repositories: [{name:"org/a"}, {name:"org/b"}]}};
     renderSelection();`);
   assert.equal(app.element("assessed-repository").disabled, true);
-  assert.match(app.element("assessed-repository").options[0].textContent, /discovery first/);
-  app.element("assessed-repository").value = "org/b";
-  app.element("assessed-repository").events.change();
+  assert.equal(app.element("assessed-repository").options.length, 0);
   assert.equal(app.element("repository-names").value, "org/a");
-  app.run("state.selection.discovery_opted_in = true; renderSelection();");
+  app.run(`state.organization_discovery = {organization:"org",latest:{repositories:[{name:"org/a"},{name:"org/b"}]}}; renderSelection();`);
   assert.equal(app.element("assessed-repository").disabled, false);
-  app.element("assessed-repository").value = "org/b";
-  app.element("assessed-repository").events.change();
-  assert.equal(app.element("repository-names").value, "org/a\norg/b");
+  app.element("repository-organization").value = "other";
+  app.element("repository-organization").events.input();
+  assert.equal(app.element("assessed-repository").disabled, true);
+  assert.equal(app.element("assessed-repository").options.length, 0);
+  assert.equal(app.element("repository-names").value, "org/a");
 });
 
 test("navigation preserves tab order and discovery and dropdown share one compact group above manual entry", () => {
@@ -186,13 +194,15 @@ test("navigation preserves tab order and discovery and dropdown share one compac
   assert.match(html, /<h2 id="repository-selection-title">Repositories to Assess<\/h2>/);
   const picker = html.match(/<fieldset class="repository-picker">[\s\S]*?<\/fieldset>/)[0];
   assert.match(picker, /<legend>Discover and add repositories<\/legend>/);
-  assert.match(picker, /type="button" id="all-repositories"/);
+  assert.match(picker, /type="button" id="discover-organization"/);
   assert.match(picker, /id="assessed-repository"/);
+  assert.match(picker, /id="assessed-repository" multiple size="6"/);
+  assert.ok(picker.indexOf('id="repository-organization"') < picker.indexOf('id="discover-organization"'));
   assert.match(picker, /type="button" id="select-all-repositories"[^>]* disabled/);
   assert.match(picker, />Select all available repositories<\/button>/);
-  assert.ok(picker.indexOf('id="all-repositories"') < picker.indexOf('id="assessed-repository"'));
+  assert.ok(picker.indexOf('id="discover-organization"') < picker.indexOf('id="assessed-repository"'));
   assert.ok(html.indexOf("</fieldset>") < html.indexOf('id="repository-names"'));
-  assert.equal((html.match(/id="all-repositories"/g) || []).length, 1);
+  assert.equal((html.match(/id="discover-organization"/g) || []).length, 1);
   assert.equal((html.match(/id="assessed-repository"/g) || []).length, 1);
   assert.doesNotMatch(html, /id="account-discovery-title"/);
   assert.match(html, /<select id="assessed-repository"[^>]* disabled>/);
@@ -200,8 +210,9 @@ test("navigation preserves tab order and discovery and dropdown share one compac
 
 test("select all merges listed repositories into the draft without changing scope and preserves manual names", () => {
   const app = dashboard();
+  app.element("repository-organization").value = "org";
   app.run(`state.selection = {repositories: [], pending: null, limit: 3, discovery_opted_in: true};
-    state.discovery = {latest: {repositories: [{name:"org/a"}, {name:"org/b"}]}};
+    state.organization_discovery = {organization:"org", latest: {repositories: [{name:"org/a"}, {name:"org/b"}]}};
     renderSelection();`);
   app.element("repository-names").value = "Org/A\norg/manual";
   app.element("repository-names").events.input();
@@ -216,8 +227,9 @@ test("select all merges listed repositories into the draft without changing scop
 
 test("select all rejects over-limit sets without truncating or overwriting draft", () => {
   const app = dashboard();
+  app.element("repository-organization").value = "org";
   app.run(`state.selection = {repositories: [], pending: null, limit: 2, discovery_opted_in: true};
-    state.discovery = {latest: {repositories: [{name:"org/a"}, {name:"org/b"}, {name:"org/c"}]}};
+    state.organization_discovery = {organization:"org", latest: {repositories: [{name:"org/a"}, {name:"org/b"}, {name:"org/c"}]}};
     renderSelection();`);
   app.element("repository-names").value = "org/manual";
   app.element("repository-names").events.input();
@@ -234,7 +246,8 @@ test("select all is disabled before discovery, with no names, while saving and w
   assert.equal(app.element("select-all-repositories").disabled, true);
   app.run("state.selection.discovery_opted_in = true; renderSelection();");
   assert.equal(app.element("select-all-repositories").disabled, true);
-  app.run('state.discovery = {latest:{repositories:[{name:"org/a"}]}}; renderSelection();');
+  app.element("repository-organization").value = "org";
+  app.run('state.organization_discovery = {organization:"org",latest:{repositories:[{name:"org/a"}]}}; renderSelection();');
   assert.equal(app.element("select-all-repositories").disabled, false);
   app.run("selectionSaving = true; renderSelection();");
   assert.equal(app.element("select-all-repositories").disabled, true);
@@ -251,6 +264,54 @@ test("selection help distinguishes persisted applied scope from temporary demo s
   assert.match(app.element("selection-help").textContent, /unapplied drafts are not saved/);
   app.run("state.selection.persistent = false; renderSelection();");
   assert.match(app.element("selection-help").textContent, /demo\/test selection is memory-only/);
+});
+
+test("true multi-select retains chosen options during incremental catalog refresh", () => {
+  const app = dashboard();
+  app.element("repository-organization").value = "org";
+  app.run(`state.selection = {repositories:[],limit:200};
+    state.organization_discovery = {organization:"org", pending:true, latest:{repositories:[{name:"org/a"},{name:"org/b"}]}};
+    renderSelection();`);
+  for (const option of app.element("assessed-repository").options) option.selected = true;
+  app.element("assessed-repository").events.change();
+  app.run(`state.organization_discovery.latest.repositories.push({name:"org/c"}); renderSelection();`);
+  assert.deepEqual(app.element("assessed-repository").options.filter(option => option.selected).map(option => option.value), ["org/a", "org/b"]);
+  assert.match(app.element("assessed-repository-help").textContent, /partial/);
+  app.element("add-selected-repositories").events.click();
+  assert.equal(app.element("repository-names").value, "org/a\norg/b");
+  assert.equal(app.run("state.selection.repositories.length"), 0);
+});
+
+test("organization discovery posts chosen organization only without applying assessment scope", async () => {
+  const app = dashboard();
+  app.element("repository-organization").value = "My-Org";
+  app.run(`state.selection = {repositories:["other/manual"],limit:200}; renderSelection();
+    globalThis.requests = [];
+    fetch = async (url, options) => { requests.push([url, JSON.parse(options.body)]); return {ok:true,json:async()=>({status:"accepted"})}; };
+    load = async () => { renderSelection(); };`);
+  await app.element("discover-organization").events.click();
+  assert.equal(app.run("JSON.stringify(requests)"), '[["/api/organization",{"organization":"My-Org"}]]');
+  assert.equal(app.element("repository-names").value, "other/manual");
+  assert.match(app.element("selection-status").textContent, /scope is unchanged/);
+  app.element("repository-organization").value = "org/repo";
+  app.element("repository-organization").events.input();
+  assert.equal(app.element("discover-organization").disabled, true);
+});
+
+test("discovery error and empty coverage are visible, with no enabled repository picker", async () => {
+  const app = dashboard();
+  app.element("repository-organization").value = "org";
+  app.run(`state.selection = {repositories:[],limit:200};
+    state.organization_discovery = {organization:"org",latest:{repositories:[],reason:{message:"SSO authorization required"}},error:null};
+    renderSelection();`);
+  assert.equal(app.element("assessed-repository").disabled, true);
+  assert.match(app.element("assessed-repository-help").textContent, /SSO authorization required/);
+  app.run(`fetch = async () => { throw new Error("failed"); }; load = async () => renderSelection();`);
+  await app.element("discover-organization").events.click();
+  assert.match(app.element("selection-status").textContent, /request failed/);
+  assert.equal(app.run("selectionSaving"), false);
+  app.run(`state.organization_discovery.error = {message:"Discovery failed"}; renderSelection();`);
+  assert.match(app.element("assessed-repository-help").textContent, /Discovery failed/);
 });
 
 test("active inference control requires configuration and scoped incident and labels stale shared samples", () => {
