@@ -26,6 +26,7 @@ function dashboard(checks = []) {
   const elements = new Map();
   const document = {
     getElementById(id) {
+      assert.ok(!["discover-organization", "select-all-repositories"].includes(id), `Removed control referenced: ${id}`);
       if (!elements.has(id)) elements.set(id, new Element(id));
       return elements.get(id);
     },
@@ -212,23 +213,19 @@ test("navigation preserves tab order and discovery and dropdown share one compac
   assert.match(html, /<h2 id="repository-selection-title">Repositories to Assess<\/h2>/);
   const picker = html.match(/<fieldset class="repository-picker">[\s\S]*?<\/fieldset>/)[0];
   assert.match(picker, /<legend>1. Find writable repositories<\/legend>/);
-  assert.match(picker, /type="button" id="discover-organization"/);
   assert.match(picker, /id="assessed-repository"/);
   assert.match(picker, /id="assessed-repository" multiple size="6"/);
-  assert.ok(picker.indexOf('id="repository-organization"') < picker.indexOf('id="discover-organization"'));
   assert.match(picker, /<select id="repository-organization"/);
   assert.doesNotMatch(picker, /repository-search|<datalist/);
-  assert.match(picker, /type="button" id="select-all-repositories"[^>]* disabled/);
-  assert.match(picker, />Add all filtered repositories<\/button>/);
-  assert.ok(picker.indexOf('id="discover-organization"') < picker.indexOf('id="assessed-repository"'));
+  assert.doesNotMatch(picker, /discover-organization|select-all-repositories|Refresh available repositories|Add all filtered repositories/);
+  assert.ok(picker.indexOf('id="repository-organization"') < picker.indexOf('id="assessed-repository"'));
   assert.ok(html.indexOf("</fieldset>") < html.indexOf('id="repository-names"'));
-  assert.equal((html.match(/id="discover-organization"/g) || []).length, 1);
   assert.equal((html.match(/id="assessed-repository"/g) || []).length, 1);
   assert.doesNotMatch(html, /id="account-discovery-title"/);
   assert.match(html, /<select id="assessed-repository"[^>]* disabled>/);
 });
 
-test("select all merges listed repositories into the draft without changing scope and preserves manual names", () => {
+test("adding selected options merges into the draft without changing scope and preserves manual names", () => {
   const app = dashboard();
   app.element("repository-organization").value = "org";
   app.run(`state.selection = {repositories: [], pending: null, limit: 3, discovery_opted_in: true};
@@ -236,16 +233,18 @@ test("select all merges listed repositories into the draft without changing scop
     renderSelection();`);
   app.element("repository-names").value = "Org/A\norg/manual";
   app.element("repository-names").events.input();
-  app.element("select-all-repositories").events.click();
+  for (const option of app.element("assessed-repository").options) option.selected = true;
+  app.element("assessed-repository").events.change();
+  app.element("add-selected-repositories").events.click();
   assert.equal(app.element("repository-names").value, "Org/A\norg/manual\norg/b");
   assert.equal(app.run("selectionDirty"), true);
   assert.equal(app.run("state.selection.repositories.length"), 0);
   assert.match(app.element("selection-status").textContent, /Discovery may be partial/);
-  app.element("select-all-repositories").events.click();
+  app.element("add-selected-repositories").events.click();
   assert.equal(app.element("repository-names").value, "Org/A\norg/manual\norg/b");
 });
 
-test("select all rejects over-limit sets without truncating or overwriting draft", () => {
+test("adding selected options rejects over-limit sets without truncating or overwriting draft", () => {
   const app = dashboard();
   app.element("repository-organization").value = "org";
   app.run(`state.selection = {repositories: [], pending: null, limit: 2, discovery_opted_in: true};
@@ -253,28 +252,33 @@ test("select all rejects over-limit sets without truncating or overwriting draft
     renderSelection();`);
   app.element("repository-names").value = "org/manual";
   app.element("repository-names").events.input();
-  app.element("select-all-repositories").events.click();
+  for (const option of app.element("assessed-repository").options) option.selected = true;
+  app.element("assessed-repository").events.change();
+  app.element("add-selected-repositories").events.click();
   assert.equal(app.element("repository-names").value, "org/manual");
   assert.match(app.element("selection-status").textContent, /selection limit is 2/);
   assert.equal(app.run("state.selection.repositories.length"), 0);
 });
 
-test("select all is disabled before discovery, with no names, while saving and when stopped", () => {
+test("add selected is disabled before discovery, without selected options, while saving and when stopped", () => {
   const app = dashboard();
   app.run(`state.selection = {repositories: [], pending: null, limit: 200, discovery_opted_in: false};
     renderSelection();`);
-  assert.equal(app.element("select-all-repositories").disabled, true);
+  assert.equal(app.element("add-selected-repositories").disabled, true);
   app.run("state.selection.discovery_opted_in = true; renderSelection();");
-  assert.equal(app.element("select-all-repositories").disabled, true);
+  assert.equal(app.element("add-selected-repositories").disabled, true);
   app.element("repository-organization").value = "org";
   app.run('state.organization_discovery = {writable:true,organization:"org",latest:{repositories:[{name:"org/a",write_access:true}]}}; renderSelection();');
-  assert.equal(app.element("select-all-repositories").disabled, false);
+  assert.equal(app.element("add-selected-repositories").disabled, true);
+  app.element("assessed-repository").options[0].selected = true;
+  app.element("assessed-repository").events.change();
+  assert.equal(app.element("add-selected-repositories").disabled, false);
   app.run("selectionSaving = true; renderSelection();");
-  assert.equal(app.element("select-all-repositories").disabled, true);
-  app.element("select-all-repositories").events.click();
+  assert.equal(app.element("add-selected-repositories").disabled, true);
+  app.element("add-selected-repositories").events.click();
   assert.equal(app.element("repository-names").value, "");
   app.run("selectionSaving = false; state.stopped = true; renderSelection();");
-  assert.equal(app.element("select-all-repositories").disabled, true);
+  assert.equal(app.element("add-selected-repositories").disabled, true);
 });
 
 test("selection help distinguishes persisted applied scope from temporary demo state", () => {
@@ -309,13 +313,14 @@ test("writable discovery covers any owner without applying assessment scope", as
     globalThis.requests = [];
     fetch = async (url, options) => { requests.push([url, JSON.parse(options.body)]); return {ok:true,json:async()=>({status:"accepted"})}; };
     load = async () => { renderSelection(); };`);
-  await app.element("discover-organization").events.click();
+  await app.element("repository-organization").events.change();
   assert.equal(app.run("JSON.stringify(requests)"), '[["/api/writable-repositories",{}]]');
   assert.equal(app.element("repository-names").value, "other/manual");
   assert.match(app.element("selection-status").textContent, /scope is unchanged/);
   app.element("repository-organization").value = "";
   await app.element("repository-organization").events.change();
-  assert.equal(app.element("discover-organization").disabled, true);
+  assert.equal(app.element("assessed-repository").disabled, true);
+  assert.equal(app.run("requests.length"), 1);
 });
 
 test("discovery error and empty coverage are visible, with no enabled repository picker", async () => {
@@ -327,7 +332,7 @@ test("discovery error and empty coverage are visible, with no enabled repository
   assert.equal(app.element("assessed-repository").disabled, true);
   assert.match(app.element("assessed-repository-help").textContent, /SSO authorization required/);
   app.run(`fetch = async () => { throw new Error("failed"); }; load = async () => renderSelection();`);
-  await app.element("discover-organization").events.click();
+  await app.element("repository-organization").events.change();
   assert.match(app.element("selection-status").textContent, /request failed/);
   assert.equal(app.run("selectionSaving"), false);
   app.run(`state.organization_discovery.error = {message:"Discovery failed"}; renderSelection();`);
@@ -407,12 +412,16 @@ test("writable picker spans all owner types, filters locally and excludes unveri
   app.element("repository-organization").value = "friend";
   app.element("repository-organization").events.change();
   assert.deepEqual(app.element("assessed-repository").options.map(option => option.value), ["friend/collaborator"]);
-  app.element("select-all-repositories").events.click();
+  app.element("assessed-repository").options[0].selected = true;
+  app.element("assessed-repository").events.change();
+  app.element("add-selected-repositories").events.click();
   assert.equal(app.element("repository-names").value, "friend/collaborator");
   app.element("repository-organization").value = "company";
   app.element("repository-organization").events.change();
   assert.deepEqual(app.element("assessed-repository").options.map(option => option.value), ["company/service"]);
-  app.element("select-all-repositories").events.click();
+  app.element("assessed-repository").options[0].selected = true;
+  app.element("assessed-repository").events.change();
+  app.element("add-selected-repositories").events.click();
   assert.equal(app.element("repository-names").value, "friend/collaborator\ncompany/service");
   assert.equal(app.run("state.selection.repositories.length"), 0);
 });
@@ -469,4 +478,30 @@ test("owner dropdown retains every loaded option without UI truncation and prese
   app.run(`state.organizations.latest.owners.push("new-owner");renderAssessedRepositoryDropdown();`);
   assert.equal(app.element("repository-organization").value, "owner-1999");
   assert.equal(app.element("repository-organization").options.length, 2002);
+});
+
+test("owner changes repopulate empty and cached results without adding hidden selections", async () => {
+  const app = dashboard();
+  app.element("repository-organization").value = "first";
+  app.run(`state.selection = {repositories:["manual/saved"],limit:200};
+    state.organization_discovery = {writable:true,latest:{complete:true,repositories:[
+      {name:"first/a",write_access:true},{name:"second/b",write_access:true}]}};
+    renderSelection();`);
+  app.element("assessed-repository").options[0].selected = true;
+  app.element("repository-organization").value = "empty";
+  await app.element("repository-organization").events.change();
+  assert.equal(app.element("assessed-repository").options.length, 0);
+  assert.equal(app.element("add-selected-repositories").disabled, true);
+  app.element("repository-organization").value = "second";
+  await app.element("repository-organization").events.change();
+  assert.deepEqual(app.element("assessed-repository").options.map(option => option.value), ["second/b"]);
+  assert.equal(app.element("add-selected-repositories").disabled, true);
+  assert.equal(app.element("repository-names").value, "manual/saved");
+  app.run(`state.organization_discovery = {writable:true,pending:false,error:{message:"Failed"},
+    latest:{repositories:[],reason:{message:"Failed"}}};
+    globalThis.retries=0;
+    fetch = async () => { retries++;return {ok:true,json:async()=>({status:"accepted"})}; };
+    load = async () => renderSelection();`);
+  await app.element("repository-organization").events.change();
+  assert.equal(app.run("retries"), 1);
 });

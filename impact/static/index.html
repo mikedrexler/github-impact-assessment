@@ -37,7 +37,6 @@
               </select>
               <p id="organization-options-status" class="muted" role="status" aria-live="polite">Loading organizations visible to the server credential...</p>
             </div>
-            <button type="button" id="discover-organization">Refresh available repositories</button>
           </div>
           <div class="repository-picker-controls">
             <div class="repository-picker-select">
@@ -45,11 +44,9 @@
               <select id="assessed-repository" multiple size="6" aria-describedby="assessed-repository-help discovery-scope-help" disabled></select>
             </div>
             <button type="button" id="add-selected-repositories" disabled>Add selected repositories</button>
-            <button type="button" id="select-all-repositories" aria-describedby="select-all-help" disabled>Add all filtered repositories</button>
           </div>
           <p id="assessed-repository-help" class="muted" role="status" aria-live="polite">Choose an organization or owner to load its writable repositories automatically.</p>
           <p id="discovery-scope-help" class="muted">Choosing an owner automatically loads the bounded credential-visible writable catalog and displays only that owner's repositories. Organization and personal-owner options load automatically. Loading uses paced, rate-limited requests and never changes assessment scope.</p>
-          <p id="select-all-help" class="muted">Add all includes only filtered results, keeping existing draft names. Partial discovery is not a complete inventory; no read-only or unknown-permission results are selectable.</p>
         </fieldset>
         <label for="repository-names">2. Selected repositories (one <code>owner/repo</code> per line, or comma-separated; add exact names or remove a name to exclude it)</label>
         <textarea id="repository-names" rows="4" spellcheck="false" placeholder="my-org/service-api&#10;my-org/web-app" aria-describedby="selection-help"></textarea>
