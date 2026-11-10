@@ -175,7 +175,7 @@ test("dropdown stays greyed out before discovery even with known and manually en
   assert.equal(app.element("repository-names").value, "org/a\norg/b");
 });
 
-test("navigation puts Configuration after Past Incidents on both pages and discovery above repository selection", () => {
+test("navigation preserves tab order and discovery and dropdown share one compact group above manual entry", () => {
   for (const file of ["index.html", "past-incidents.html"]) {
     const html = readFileSync(join(__dirname, "../impact/static", file), "utf8");
     const nav = html.match(/<nav[\s\S]*?<\/nav>/)[0];
@@ -183,7 +183,15 @@ test("navigation puts Configuration after Past Incidents on both pages and disco
     assert.ok(nav.indexOf("Past Incidents") < nav.indexOf("Configuration"));
   }
   const html = readFileSync(join(__dirname, "../impact/static/index.html"), "utf8");
-  assert.ok(html.indexOf('id="all-repositories"') < html.indexOf('id="assessed-repository"'));
+  const picker = html.match(/<fieldset class="repository-picker">[\s\S]*?<\/fieldset>/)[0];
+  assert.match(picker, /<legend>Discover and add repositories<\/legend>/);
+  assert.match(picker, /type="button" id="all-repositories"/);
+  assert.match(picker, /id="assessed-repository"/);
+  assert.ok(picker.indexOf('id="all-repositories"') < picker.indexOf('id="assessed-repository"'));
+  assert.ok(html.indexOf("</fieldset>") < html.indexOf('id="repository-names"'));
+  assert.equal((html.match(/id="all-repositories"/g) || []).length, 1);
+  assert.equal((html.match(/id="assessed-repository"/g) || []).length, 1);
+  assert.doesNotMatch(html, /id="account-discovery-title"/);
   assert.match(html, /<select id="assessed-repository"[^>]* disabled>/);
 });
 
