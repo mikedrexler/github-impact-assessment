@@ -163,7 +163,13 @@ class ProbeContext:
             if isinstance(value, ProbeError):
                 raise value
             return value
-        return self.client.get(path)
+        try:
+            value = self.client.get(path)
+        except ProbeError as error:
+            self.cache[path] = error
+            raise
+        self.cache[path] = value
+        return value
 
     def choices(self) -> list[tuple[str, str]]:
         if self.incident.get("status") in {"resolved", "postmortem"} or self.component["id"] not in {

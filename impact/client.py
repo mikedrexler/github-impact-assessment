@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import subprocess
@@ -10,8 +11,10 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable
 
 STATUS_URL = "https://www.githubstatus.com/api/v2/summary.json"
@@ -65,6 +68,8 @@ class Config:
     discovery_resume_seconds: int = 5
     workers: int = 4
     port: int = 8765
+    github_requests_hour: int = 600
+    github_requests_minute: int = 30
 
     @classmethod
     def from_env(cls) -> Config:
@@ -76,6 +81,7 @@ class Config:
             "discovery_seconds": (1, 60), "discovery_requests": (1, 100),
             "discovery_resume_seconds": (1, 300),
             "workers": (1, 16), "port": (1024, 65535),
+            "github_requests_hour": (1, 1800), "github_requests_minute": (1, 60),
         }
         values = {}
         for name, (low, high) in bounds.items():
@@ -97,6 +103,68 @@ class Backoff:
     def __init__(self):
         self.until = 0.0
         self.lock = threading.Lock()
+        self.admissions: deque[float] = deque()
+        self.remaining: int | None = None
+        self.reset = 0.0
+        self.headroom = 50
+        self.reason = None
+
+    def reserve(self, now: float, config: Config):
+        """Caller holds lock; every attempt, including retries, consumes a slot."""
+        while self.admissions and self.admissions[0] <= now - 3600:
+            self.admissions.popleft()
+        if now < self.until:
+            raise ProbeError("rate_limit", "GitHub reads deferred by shared rate budget/backoff")
+        if self.remaining is not None and self.remaining <= self.headroom and self.reset > time.time():
+            self.until = now + self.reset - time.time() + 2
+            self.reason = "provider_quota_reserve"
+            raise ProbeError("rate_limit", "GitHub quota reserve reached; checks deferred")
+        minute = [at for at in self.admissions if at > now - 60]
+        if len(self.admissions) >= config.github_requests_hour or len(minute) >= config.github_requests_minute:
+            self.until = max(
+                self.admissions[0] + 3600 if len(self.admissions) >= config.github_requests_hour else now,
+                minute[0] + 60 if len(minute) >= config.github_requests_minute else now,
+            )
+            self.reason = "local_request_budget"
+            raise ProbeError("rate_limit", "Local GitHub request budget reached; checks deferred")
+        self.admissions.append(now)
+        if self.remaining is not None:
+            self.remaining = max(0, self.remaining - 1)
+
+    def observe(self, headers: dict, now: float):
+        headers = {key.lower(): value for key, value in headers.items()}
+        try:
+            remaining = int(headers["x-ratelimit-remaining"])
+            reset = float(headers["x-ratelimit-reset"])
+            limit = int(headers.get("x-ratelimit-limit", "500"))
+            if remaining < 0 or limit < 1:
+                return
+        except (KeyError, ValueError, TypeError):
+            return
+        if not math.isfinite(reset):
+            return
+        with self.lock:
+            # Concurrent responses can arrive out of order. Never raise our
+            # remaining estimate within one provider quota window.
+            if reset > self.reset:
+                self.remaining, self.reset = remaining, reset
+            elif reset == self.reset:
+                self.remaining = min(self.remaining if self.remaining is not None else remaining, remaining)
+            reserve = min(50, max(1, limit // 10))
+            self.headroom = reserve
+            if self.remaining is not None and self.remaining <= reserve:
+                self.until = max(self.until, now + max(60, self.reset - time.time() + 2))
+                self.reason = "provider_quota_reserve"
+
+    def snapshot(self) -> dict:
+        with self.lock:
+            now = time.monotonic()
+            return {
+                "deferred_seconds": max(0, round(self.until - now)),
+                "reason": self.reason if self.until > now else None,
+                "provider_remaining_estimate": self.remaining,
+                "attempts_last_hour": sum(at > now - 3600 for at in self.admissions),
+            }
 
 
 class Client:
@@ -122,13 +190,13 @@ class Client:
                 raise ProbeError("cancelled", "Monitoring stopped")
             if self.clock() >= self.deadline:
                 raise ProbeError("deadline", "Assessment time budget exhausted")
-            with self.backoff.lock:
-                if github and self.clock() < self.backoff.until:
-                    raise ProbeError("rate_limit", "GitHub API backoff is active")
             if self.requests >= self.config.max_requests:
                 raise ProbeError("request_limit", "Assessment request budget exhausted")
             if github and not self._token:
                 raise ProbeError("authentication", "No configured GitHub credential")
+            if github:
+                with self.backoff.lock:
+                    self.backoff.reserve(self.clock(), self.config)
             self.requests += 1
 
     def _json(
@@ -152,6 +220,7 @@ class Client:
                     data = response.read(MAX_RESPONSE_BYTES + 1)
                     response_headers = dict(response.headers.items())
                 if github:
+                    self.backoff.observe(response_headers, self.clock())
                     sso = next((value for key, value in response_headers.items() if key.lower() == "x-github-sso"), "")
                     if "partial-results" in sso or "required" in sso:
                         with self._lock:
@@ -164,6 +233,8 @@ class Client:
                     raise ProbeError("invalid_response", "Service returned invalid JSON") from None
             except urllib.error.HTTPError as error:
                 status = error.code
+                if github:
+                    self.backoff.observe(dict(error.headers.items()), self.clock())
                 retry_after = error.headers.get("Retry-After")
                 remaining = error.headers.get("X-RateLimit-Remaining")
                 # Conservatively back off on 403: secondary limits do not always
@@ -173,6 +244,11 @@ class Client:
                     try:
                         delay = float(retry_after or "60")
                     except ValueError:
+                        try:
+                            delay = parsedate_to_datetime(retry_after or "").timestamp() - time.time()
+                        except (TypeError, ValueError, OverflowError):
+                            delay = 60
+                    if not math.isfinite(delay):
                         delay = 60
                     try:
                         reset_delay = float(error.headers.get("X-RateLimit-Reset", "0")) - time.time()
@@ -180,6 +256,7 @@ class Client:
                         reset_delay = 0
                     with self.backoff.lock:
                         self.backoff.until = max(self.backoff.until, self.clock() + max(60, delay, reset_delay))
+                        self.backoff.reason = "provider_rate_or_permission_backoff"
                 error.close()
                 if limited:
                     service = "GitHub API" if github else "Status API"

@@ -152,15 +152,45 @@ function renderChecks() {
     const row = node("tr");
     const cell = node("td", all.length
       ? "No evidence matches the selected repository and text filter."
-      : state.latest.incidents.length ? "No scoped repository checks available. See coverage gaps." : "No unresolved incident: incident-time probes are idle. Inventory and status polling remain active.");
+      : state.latest.incidents.length ? "No scoped repository checks available. See coverage gaps." : "No unresolved incident: incident-time probes are idle. Continuous selected-repository observations, inventory and status polling remain active.");
     cell.colSpan = 3;
     row.append(cell);
     $("checks").append(row);
   }
 }
+function renderObservations() {
+  const panel = $("observations");
+  panel.replaceChildren();
+  const budget = state.rate_budget;
+  if (budget) paragraph(panel, `Shared GitHub request budget: ${state.config.github_requests_hour}/hour, ${state.config.github_requests_minute}/minute. ${budget.attempts_last_hour} attempts this hour; provider remaining estimate ${budget.provider_remaining_estimate ?? "not reported"}. ${budget.deferred_seconds ? `DEFERRED for ${budget.deferred_seconds}s (${budget.reason}).` : "No current rate-budget deferral."} Other clients can consume the same credential quota; limits cannot be guaranteed externally.`, budget.deferred_seconds ? "warning" : "muted");
+  const report = state.latest?.observations;
+  if (!report?.enabled) {
+    paragraph(panel, report?.error || report?.reason || "Continuous observations pending.", report?.error ? "error" : "muted");
+    return;
+  }
+  const rows = report.rows;
+  const fresh = row => row.fresh && row.sample && Date.now() / 1000 - row.sample.at >= 0
+    && Date.now() / 1000 - row.sample.at <= report.fresh_seconds;
+  const observed = rows.filter(row => fresh(row) && !row.gap).length;
+  paragraph(panel, `${observed}/${report.selected} selected repositories have fresh Actions run-list observations; ${report.selected - observed} have missing, failed or stale coverage. Freshness target ${report.fresh_seconds / 60} minutes; at most ${report.batch_size} due repositories per cycle. Budgets may prevent meeting this target.`);
+  paragraph(panel, `${report.persistent ? "Persisted locally" : "Memory-only demo/test observations"}: up to ${report.retention_days} days / ${report.record_limit} samples across scopes. Baselines require 3 prior operational-Status samples within 24 hours before the incident (or now). A status-operational baseline is not verified healthy behavior.`, "muted");
+  paragraph(panel, report.limitation, "muted");
+  for (const row of rows) {
+    const details = node("details");
+    const sample = row.sample;
+    const gap = row.gap || (!fresh(row) ? "stale" : null);
+    details.append(node("summary", `${row.repository}: ${gap || "run-list observed"} | ${gap ? "observation_unavailable" : row.signal}`));
+    paragraph(details, `Last attempt ${sample ? date(new Date(sample.at * 1000).toISOString()) : "never"}; outcome ${sample?.outcome || "none"}. Metadata available: ${row.metadata_available ? "yes (cached validation)" : "no"}. Baseline samples ${row.baseline_samples}; median queued runs ${row.baseline_median_queued_runs ?? "insufficient"}.`);
+    if (sample?.outcome === "observed") paragraph(details, `Sample: ${sample.sampled_runs} runs, ${sample.queued_runs} queued/waiting, oldest queued creation age ${sample.oldest_queued_age_seconds ?? "unknown"}s; ${sample.failed_runs}/${sample.completed_runs} completed sampled runs failed/timed out. ${sample.sample_partial ? "Partial run history." : "Returned run-list sample only."} This is not a failure rate or a functional success test.`);
+    paragraph(details, `${row.incident_overlap && fresh(row) ? "Sample collected during a mapped Actions incident." : "No fresh mapped Actions incident overlap established."} Queue increases and run failures have multiple possible causes. Other feature functionality remains unverified.`, "muted");
+    for (const previous of row.recent_incident_samples) paragraph(details, `Retained incident sample: ${date(new Date(previous.at * 1000).toISOString())}; ${previous.outcome}; incident IDs ${previous.incident_ids.join(", ")}.`, "muted");
+    panel.append(details);
+  }
+}
 function render() {
   renderSelection();
   renderCopilotProbe();
+  renderObservations();
   const report = state.latest;
   const discovery = state.discovery;
   const known = discovery?.latest || report?.inventory;
@@ -239,7 +269,7 @@ function render() {
   const explicitScope = known.selected_count !== undefined;
   const completedScope = explicitScope ? "selected repository validation complete" : "traversal complete for credential-visible scope";
   paragraph($("coverage"), `Background ${explicitScope ? "selected validation" : "discovery"}: ${known.complete ? completedScope : "IN PROGRESS / PARTIAL / PAUSED"}. ${known.discovered} known. ${discovery?.busy ? "Batch running." : `Next batch ${date(discovery?.next_batch_at)}.`} Discovery/validation continues independently of the assessment poll interval.`);
-  paragraph($("coverage"), `${known.next_repository ? "Selected repository validation is checkpointed." : known.next_page ? `Next discovery page: ${known.next_page}; saved progress resumes automatically in a background batch.` : "Discovery/validation pass reached its end; revalidation waits for the configured poll interval."} Current pass: ${known.scan_discovered} discovered, started ${date(known.scan_started_at)}. Last unrestricted pass completed: ${date(known.last_completed_at)}. ${known.cached_repositories} cached entries awaiting revalidation.`, "muted");
+  paragraph($("coverage"), `${known.next_repository ? "Selected repository validation is checkpointed." : known.next_page ? `Next discovery page: ${known.next_page}; saved progress resumes automatically in a background batch.` : "Discovery/validation pass reached its end; complete selected metadata is revalidated no more often than hourly."} Current pass: ${known.scan_discovered} discovered, started ${date(known.scan_started_at)}. Last unrestricted pass completed: ${date(known.last_completed_at)}. ${known.cached_repositories} cached entries awaiting revalidation.`, "muted");
   if (known.next_repository) paragraph($("coverage"), `Next selected repository: ${known.next_repository}/${known.selected_count}. Validation resumes within the configured discovery budgets.`, "muted");
   for (const error of known.repository_errors || []) paragraph($("coverage"), `${error.repository} / ${error.kind}: ${error.message}`, "error");
   paragraph($("coverage"), known.scope);

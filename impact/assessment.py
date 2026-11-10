@@ -15,6 +15,7 @@ from .client import Client, InventoryState, ProbeError, inventory, repository_pa
 if TYPE_CHECKING:
     from .agent import Agent
     from .copilot_probe import CopilotProbe
+    from .observations import Observations
 
 
 class ReadClient(Protocol):
@@ -259,6 +260,8 @@ def assess(
     client: Client, offset: int = 0, inventory_state: InventoryState | None = None,
     *, inventory_report: dict | None = None, agent: Agent | None = None,
     copilot_probe: CopilotProbe | None = None, run_copilot: bool = False,
+    observations: Observations | None = None, observation_scope: str = "",
+    selected_names: tuple[str, ...] | None = None,
 ) -> dict:
     from .agent import MAX_CONTEXTS, Agent, ProbeContext
 
@@ -320,8 +323,8 @@ def assess(
     copilot_evidence = copilot_probe.snapshot() if copilot_probe else None
     now = datetime.now(timezone.utc)
     contexts = [ProbeContext(client, repo, component, incident, now)
-                for repo, component, incident in tasks[:MAX_CONTEXTS]]
-    agent_report = (agent or Agent()).run(contexts, getattr(client, "stop", threading.Event()))
+                for repo, component, incident in tasks]
+    agent_report = (agent or Agent()).run(contexts[:MAX_CONTEXTS], getattr(client, "stop", threading.Event()))
 
     def check(indexed_task: tuple) -> dict:
         index, task = indexed_task
@@ -331,11 +334,31 @@ def assess(
 
     with ThreadPoolExecutor(max_workers=client.config.workers) as pool:
         rows = list(pool.map(check, enumerate(tasks)))
+    observation_report = {"enabled": False, "reason": "Continuous observations require an explicit selected repository scope."}
+    if observations and selected_names:
+        import sqlite3
+        import sys
+
+        try:
+            cached = {path: value for context in contexts for path, value in context.cache.items()}
+            observation_report = observations.collect(
+                client, observation_scope, selected_names, repos, status_available, components, incidents, cached,
+            )
+        except (sqlite3.Error, OSError, ValueError, TypeError) as error:
+            observation_report = {
+                "enabled": False, "error": "Observation storage/processing failed; continuous coverage is unavailable. Prior evidence is not current.",
+            }
+            print(f"Observation recording failed ({type(error).__name__}); no raw response logged", file=sys.stderr)
     for warning in sorted(getattr(client, "access_warnings", set())):
         errors.append({"source": "github", "kind": "sso_partial_results", "message": warning})
     counts = {key: sum(row["classification"] == key for row in rows)
               for key in ("confirmed", "suspected", "unknown", "not-applicable")}
     issue_rows = sum(row["error_kind"] is not None for row in rows)
+    resource_errors = {"rate_limit", "request_limit", "deadline", "cancelled"}
+    deferred = {row["repository"] for row in rows if row["error_kind"] in resource_errors}
+    stride = selected_count
+    if deferred:
+        stride = max(1, next(index for index, repo in enumerate(selected) if repo["name"] in deferred))
     return {
         "started_at": started, "completed_at": timestamp(),
         "status_available": status_available,
@@ -355,15 +378,21 @@ def assess(
             "components": [part.get("id") for part in item.get("components", []) if isinstance(part, dict)],
         } for item in incidents],
         "inventory": found, "checks": rows, "counts": counts, "errors": errors, "agent": agent_report,
+        "observations": observation_report,
         "coverage": {
             "repositories_selected": selected_count,
             "repositories_deferred": len(repos) - selected_count if mapped else 0,
             "assessments_deferred": len(repos) * len(mapped) - len(rows),
             "check_errors": issue_rows, "mapped_incident_components": len(mapped),
+            "rate_or_budget_deferred_repositories": len(deferred),
+            "continuous_observations_fresh": (
+                bool(observation_report.get("enabled") and observation_report.get("gaps") == 0)
+                if selected_names else None
+            ),
             "complete": found["complete"] and status_available and not errors and issue_rows == 0
                         and len(rows) == len(repos) * len(mapped),
             "note": "Completion means bounded enumeration/probes finished, never proof of service health or full account access. No incident-time probes without a mapped unresolved incident.",
         },
         "requests_used": client.requests,
-        "next_offset": (offset + selected_count) % len(repos) if repos else 0,
+        "next_offset": (offset + stride) % len(repos) if repos else 0,
     }

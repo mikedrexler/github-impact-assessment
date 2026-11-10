@@ -207,7 +207,7 @@ class SelectionTests(unittest.TestCase):
         ]:
             with self.subTest(args=args), patch("sys.argv", ["impact", *args]), patch(
                 "impact.app.Monitor",
-            ) as monitor, patch("impact.app.SelectionStore") as store, patch(
+            ) as monitor, patch("impact.app.SelectionStore") as store, patch("impact.app.ObservationStore"), patch(
                 "impact.app.make_server", side_effect=OSError,
             ), patch("impact.app.sys.stderr"):
                 store.return_value.load.return_value = ()
