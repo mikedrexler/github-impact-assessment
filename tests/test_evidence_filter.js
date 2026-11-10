@@ -183,11 +183,13 @@ test("navigation preserves tab order and discovery and dropdown share one compac
     assert.ok(nav.indexOf("Past Incidents") < nav.indexOf("Configuration"));
   }
   const html = readFileSync(join(__dirname, "../impact/static/index.html"), "utf8");
+  assert.match(html, /<h2 id="repository-selection-title">Repositories to Assess<\/h2>/);
   const picker = html.match(/<fieldset class="repository-picker">[\s\S]*?<\/fieldset>/)[0];
   assert.match(picker, /<legend>Discover and add repositories<\/legend>/);
   assert.match(picker, /type="button" id="all-repositories"/);
   assert.match(picker, /id="assessed-repository"/);
   assert.match(picker, /type="button" id="select-all-repositories"[^>]* disabled/);
+  assert.match(picker, />Select all available repositories<\/button>/);
   assert.ok(picker.indexOf('id="all-repositories"') < picker.indexOf('id="assessed-repository"'));
   assert.ok(html.indexOf("</fieldset>") < html.indexOf('id="repository-names"'));
   assert.equal((html.match(/id="all-repositories"/g) || []).length, 1);
