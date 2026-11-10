@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import signal
+import sqlite3
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,6 +15,7 @@ from .client import Config, repository_selection
 from .demo import DemoClient
 from .monitor import Monitor
 from .selection_store import SelectionStore
+from .observations import ObservationStore
 
 ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -141,10 +143,11 @@ def main():
         selected = repository_selection(args.repos, config.max_repositories) if args.repos else (
             None if args.all_repositories or args.demo else selection_store.load(config.max_repositories) if selection_store else ()
         )
-    except (ValueError, OSError, UnicodeDecodeError, RecursionError):
-        parser.error("Invalid configuration or saved repository scope. Check settings and ~/.local/state/github-impact-assessment/repositories.json; explicit --repos or --all-repositories overrides saved scope.")
+        observation_store = ObservationStore(selection_store.path.with_name("observations.sqlite3") if selection_store else None)
+    except (ValueError, OSError, UnicodeDecodeError, RecursionError, sqlite3.Error):
+        parser.error("Invalid configuration, saved repository scope or observation database. Check settings and ~/.local/state/github-impact-assessment; explicit --repos or --all-repositories overrides saved scope only.")
     monitor = Monitor(config, client_factory=DemoClient if args.demo else None, demo=args.demo,
-                      selected=selected, selection_store=selection_store)
+                      selected=selected, selection_store=selection_store, observation_store=observation_store)
     try:
         server = make_server(monitor)
     except OSError:

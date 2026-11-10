@@ -348,3 +348,27 @@ test("configuration navigation isolates repository controls and preserves draft 
   app.run('window.location.hash = "#unknown"; renderPage();');
   assert.equal(app.element("dashboard-panel").hidden, false);
 });
+
+test("continuous coverage renders budget deferrals, missing metadata and insufficient baselines honestly", () => {
+  const app = dashboard();
+  app.run(`state.config = {github_requests_hour:600,github_requests_minute:30};
+    state.rate_budget = {attempts_last_hour:30,provider_remaining_estimate:50,deferred_seconds:120,reason:"provider_quota_reserve"};
+    state.latest.observations = {enabled:true,persistent:true,selected:2,fresh_seconds:900,batch_size:20,retention_days:14,record_limit:20000,
+      limitation:"Other functions unverified.",rows:[
+        {repository:"org/a",fresh:true,gap:null,sample:{at:Date.now()/1000,outcome:"observed",sampled_runs:0,queued_runs:0,completed_runs:0,failed_runs:0},
+         metadata_available:true,baseline_samples:0,baseline_median_queued_runs:null,signal:"no_runs_in_sample",recent_incident_samples:[]},
+        {repository:"org/hidden",fresh:false,gap:"metadata_unavailable",sample:null,metadata_available:false,
+         baseline_samples:0,baseline_median_queued_runs:null,signal:"observation_unavailable",recent_incident_samples:[]}
+      ]};
+    renderObservations();`);
+  const panel = app.element("observations");
+  assert.match(panel.children[0].textContent, /DEFERRED for 120s/);
+  assert.match(panel.children[1].textContent, /1\/2 selected/);
+  assert.match(panel.children[4].children[0].textContent, /no_runs_in_sample/);
+  assert.match(panel.children[5].children[0].textContent, /metadata_unavailable/);
+  app.run(`state.latest.observations.rows[0].sample.at -= 1000; renderObservations();`);
+  assert.match(panel.children[1].textContent, /0\/2 selected/);
+  assert.match(panel.children[4].children[0].textContent, /stale/);
+  app.run(`state.latest.observations = {enabled:false,error:"Storage failed; coverage unavailable"}; renderObservations();`);
+  assert.match(panel.children[1].textContent, /Storage failed/);
+});

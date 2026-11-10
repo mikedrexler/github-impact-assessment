@@ -18,6 +18,7 @@ from .client import Backoff, Client, Config, InventoryState, ProbeError, credent
 from .history import EVIDENCE_LIMIT, HISTORY_LIMIT, incident_order, project_incidents
 from .copilot_probe import CopilotProbe
 from .selection_store import SelectionStore
+from .observations import Observations, ObservationStore
 
 
 class Monitor:
@@ -26,11 +27,13 @@ class Monitor:
         demo: bool = False, agent: Agent | None = None, selected: tuple[str, ...] | None = None,
         copilot_probe: CopilotProbe | None = None,
         selection_store: SelectionStore | None = None,
+        observation_store: ObservationStore | None = None,
     ):
         self.config = config
         self.demo = demo
         self._factory = client_factory
         self._selection_store = selection_store if not demo else None
+        self._observations = Observations(observation_store or ObservationStore())
         # Injected clients stay network-isolated unless a planner is also injected.
         self._agent = agent if agent is not None else Agent.from_env(demo=demo or client_factory is not None)
         self._copilot = copilot_probe or CopilotProbe.from_env(isolated=demo or client_factory is not None)
@@ -290,6 +293,10 @@ class Monitor:
                     delay = max(delay, self._backoff.until - time.monotonic())
             report["updated_at"] = timestamp()
             report["requests_used"] = client.requests
+            if self._selected and report["complete"]:
+                # Metadata identity changes much less often than run state.
+                # Revalidate hourly; continuous observations remain independent.
+                delay = max(delay, 3600)
             with self._lock:
                 self._discovery_latest = report
                 self._discovery_error = None
@@ -327,7 +334,13 @@ class Monitor:
                 found["complete"] = False
                 found["reason"] = {"kind": "discovery_error", "message": discovery_error["message"]}
             report = assess(client, self._offset, inventory_report=found, agent=self._agent,
-                            copilot_probe=self._copilot, run_copilot=run_copilot)
+                            copilot_probe=self._copilot, run_copilot=run_copilot,
+                            observations=self._observations, selected_names=self._selected,
+                            observation_scope=hashlib.sha256(
+                                (str(self._credential_key) + "\n" + "\n".join(sorted(
+                                    name.casefold() for name in self._selected or ()
+                                ))).encode()
+                            ).hexdigest())
             self._collect_past(client)
             report["requests_used"] = client.requests
             with self._lock:
@@ -406,6 +419,7 @@ class Monitor:
                 "next_poll_at": next_at, "server_time": timestamp(),
                 "config": asdict(self.config), "latest": self._latest,
                 "copilot_probe": self._copilot.snapshot(),
+                "rate_budget": self._backoff.snapshot(),
                 "organization_discovery": {
                     "organization": self._organization, "busy": self._organization_busy,
                     "pending": self._organization_due != float("inf"),
