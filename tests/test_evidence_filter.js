@@ -339,10 +339,10 @@ test("discovery error and empty coverage are visible, with no enabled repository
   assert.match(app.element("assessed-repository-help").textContent, /Discovery failed/);
 });
 
-test("dashboard is Actions-only with no active Copilot diagnostic", () => {
+test("dashboard includes Actions and Webhooks with no active Copilot diagnostic", () => {
   const html = readFileSync(join(__dirname, "../impact/static/index.html"), "utf8");
-  assert.match(html, /Unresolved Actions incidents/);
-  assert.match(html, /Actions status/);
+  assert.match(html, /Unresolved Actions and Webhooks incidents/);
+  assert.match(html, /Actions and Webhooks status/);
   assert.doesNotMatch(html, /copilot-probe|Copilot inference/);
 });
 

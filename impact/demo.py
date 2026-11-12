@@ -17,14 +17,14 @@ class DemoClient:
 
     def status(self):
         self.requests += 1
-        names = ["Actions"]
+        names = ["Actions", "Webhooks"]
         components = [{"id": name.casefold().replace(" ", "-"), "name": name,
                        "status": "degraded_performance"} for name in names]
         return {
-            "page": {"updated_at": self.ago(1)}, "status": {"description": "FIXTURE: Actions incident"},
+            "page": {"updated_at": self.ago(1)}, "status": {"description": "FIXTURE: Actions and Webhooks incident"},
             "components": components,
             "incidents": [{
-                "id": "demo-incident", "name": "FIXTURE: Actions queue delays",
+                "id": "demo-incident", "name": "FIXTURE: Actions queues and webhook delivery failures",
                 "status": "investigating", "started_at": self.ago(40), "updated_at": self.ago(1),
                 "components": components,
             }],
@@ -68,6 +68,10 @@ class DemoClient:
             }]}
         if "/check-runs?" in path:
             return {"total_count": 0, "check_runs": []}
+        if "/hooks?" in path:
+            return [{"id": 301, "active": True}]
+        if "/hooks/301/deliveries?" in path:
+            return [{"id": 401, "delivered_at": self.ago(10), "status_code": 503}]
         raise ProbeError("not_found_or_hidden", "Unconfigured fixture endpoint")
 
     def past_incidents(self):

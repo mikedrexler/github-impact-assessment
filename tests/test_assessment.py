@@ -11,6 +11,7 @@ NOW = datetime(2026, 11, 9, 18, 50, tzinfo=timezone.utc)
 INCIDENT = {"id": "incident", "name": "Actions incident", "started_at": "2026-11-09T18:10:00Z"}
 REPO = {"name": "example/repo", "url": "https://github.com/example/repo", "has_issues": True, "has_pages": True}
 COMPONENT = {"id": "actions", "name": "Actions"}
+WEBHOOKS = {"id": "webhooks", "name": "Webhooks", "status": "operational"}
 
 
 class FixtureClient:
@@ -71,7 +72,7 @@ class AssessmentTests(unittest.TestCase):
 
     def test_all_current_component_names_and_future_fallback(self):
         expected = {
-            "Git Operations": "unsupported", "Webhooks": "unsupported", "API Requests": "unsupported",
+            "Git Operations": "unsupported", "Webhooks": "webhooks", "API Requests": "unsupported",
             "Issues": "unsupported", "Pull Requests": "unsupported", "Actions": "actions",
             "Packages": "unsupported", "Pages": "unsupported", "Copilot": "unsupported",
             "Codespaces": "unsupported", "Copilot AI Model Providers": "unsupported",
@@ -93,7 +94,7 @@ class AssessmentTests(unittest.TestCase):
 
     def test_no_incident_does_not_fabricate_checks(self):
         client = FixtureClient({"/user/repos?": [dict(full_name="example/repo")]}, {
-            "components": [{"id": "a", "name": "Actions", "status": "operational"}], "incidents": [],
+            "components": [{"id": "a", "name": "Actions", "status": "operational"}, WEBHOOKS], "incidents": [],
         })
         report = assess(client)
         self.assertEqual(report["checks"], [])
@@ -132,7 +133,7 @@ class AssessmentTests(unittest.TestCase):
             "incidents": [{**INCIDENT, "components": [{"id": "missing"}]}],
         })
         report = assess(client)
-        self.assertEqual({error["kind"] for error in report["errors"]}, {"component_without_incident"})
+        self.assertEqual({error["kind"] for error in report["errors"]}, {"component_without_incident", "webhooks_component_missing"})
         self.assertFalse(report["coverage"]["complete"])
         self.assertEqual(report["checks"], [])
 
@@ -226,11 +227,11 @@ class AssessmentTests(unittest.TestCase):
             with self.subTest(name=name):
                 row = probe(FixtureClient({suffix: response}), REPO, {"id": name, "name": name}, INCIDENT, NOW)
                 self.assertEqual(row["classification"], "unknown")
-                self.assertIn("Outside the Actions-only", row["reason"])
+                self.assertIn("Outside the Actions and Webhooks", row["reason"])
 
     def test_unsupported_probes_never_request_more_permissions(self):
         client = FixtureClient()
-        for name in ["Webhooks", "Packages", "Copilot", "Codespaces", "Copilot AI Model Providers", "New area"]:
+        for name in ["Packages", "Copilot", "Codespaces", "Copilot AI Model Providers", "New area"]:
             row = probe(client, REPO, {"id": name, "name": name}, INCIDENT, NOW)
             self.assertEqual(row["classification"], "unknown")
         self.assertEqual(client.calls, [])
@@ -260,11 +261,11 @@ class AssessmentTests(unittest.TestCase):
     def test_demo_covers_queue_self_hosted_and_permissions(self):
         client = DemoClient(Config(), threading.Event())
         report = assess(client)
-        self.assertEqual(len(report["components"]), 1)
+        self.assertEqual(len(report["components"]), 2)
         self.assertEqual(report["counts"]["suspected"], 1)
         self.assertEqual(report["counts"]["confirmed"], 0)
-        self.assertEqual(report["coverage"]["check_errors"], 1)
-        self.assertEqual(len(report["checks"]), 3)
+        self.assertEqual(report["coverage"]["check_errors"], 2)
+        self.assertEqual(len(report["checks"]), 6)
 
     def test_malformed_workflow_response_is_explicit(self):
         client = FixtureClient({"/actions/runs?": {"workflow_runs": "invalid"}})

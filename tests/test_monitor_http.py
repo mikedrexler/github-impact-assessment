@@ -79,7 +79,7 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(len(monitor.snapshot()["history"]), 10)
         snapshot = monitor.snapshot()
         snapshot["latest"]["checks"].clear()
-        self.assertEqual(len(monitor.snapshot()["latest"]["checks"]), 3)
+        self.assertEqual(len(monitor.snapshot()["latest"]["checks"]), 6)
 
     @patch("impact.monitor.credentials", return_value=("sentinel-private-token", "environment"))
     @patch("impact.monitor.Client")

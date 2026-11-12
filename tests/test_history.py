@@ -21,13 +21,15 @@ def incident(identity="past", started="2026-11-09T18:12:37Z", **extra):
 
 
 class HistoryTests(unittest.TestCase):
-    def test_past_history_excludes_non_actions_and_projects_only_actions_for_mixed_incidents(self):
+    def test_past_history_includes_webhooks_and_excludes_other_services(self):
         rows = project_incidents({"incidents": [
             incident("pages", components=[{"id": "pages", "name": "Pages"}]),
             incident("mixed", components=[{"id": "pages", "name": "Pages"}, {"id": "actions", "name": "Actions"}]),
+            incident("hooks", components=[{"id": "webhooks", "name": "Webhooks"}]),
         ]})
-        self.assertEqual([item["id"] for item in rows], ["mixed"])
+        self.assertEqual([item["id"] for item in rows], ["mixed", "hooks"])
         self.assertEqual(rows[0]["components"], ["Actions"])
+        self.assertEqual(rows[1]["components"], ["Webhooks"])
 
     def test_public_history_never_receives_credentials(self):
         opener = Opener(Response({"incidents": [incident()]}))
@@ -93,7 +95,7 @@ class HistoryTests(unittest.TestCase):
         later = monitor.past_snapshot()
         self.assertEqual(later["incidents"][0]["assessment"]["completed_at"], original_time)
         first["incidents"][0]["assessment"]["checks"].clear()
-        self.assertEqual(len(later["incidents"][0]["assessment"]["checks"]), 3)
+        self.assertEqual(len(later["incidents"][0]["assessment"]["checks"]), 6)
         self.assertEqual(len(monitor._incident_evidence), 1)
         self.assertEqual(len(monitor.snapshot()["history"]), 2)
 

@@ -37,12 +37,13 @@ def parsed(value: Any) -> datetime | None:
 
 def adapter_for(name: str) -> str:
     """Live IDs map incidents; names only select a conservative evidence adapter."""
-    return "actions" if name.casefold().strip() == "actions" else "unsupported"
+    return {"actions": "actions", "webhooks": "webhooks"}.get(name.casefold().strip(), "unsupported")
 
 
 LIMITATIONS = {
     "actions": "Samples the 30 most recently created runs; first 100 jobs and first 100 check runs for at most 5 incident-time runs. No workflow execution, runner probing, logs or exhaustive history.",
-    "unsupported": "Outside the Actions-only assessment scope; no probe is performed.",
+    "webhooks": "Repository webhooks only: first 3 hooks and first 30 delivery summaries per active hook. Existing webhook read access required. No payloads, receiver requests, pings or redeliveries. Organization/GitHub App hooks, missing events and delivery latency are not tested; receiver/network/configuration failures remain confounders.",
+    "unsupported": "Outside the Actions and Webhooks assessment scope; no probe is performed.",
 }
 
 
@@ -159,6 +160,57 @@ def actions(client: ReadClient, repo: dict, incident: dict, row: dict, now: date
     )
 
 
+def webhooks(client: ReadClient, repo: dict, incident: dict, row: dict, now: datetime):
+    path = repository_path(repo["name"])
+    url = repo["url"] + "/settings/hooks"
+    hooks = list_data(client.get(path + "/hooks?per_page=3&page=1"))
+    if len(hooks) > 3:
+        raise ProbeError("invalid_response", "Webhook list exceeded requested bound")
+    row["evidence"].append({
+        "summary": f"Sampled {len(hooks)} repository hooks (first page only; organization/GitHub App hooks excluded). "
+                   + ("Hook coverage may be partial." if len(hooks) == 3 else "No exhaustive service-health conclusion."),
+        "url": url,
+    })
+    start = incident_start(incident)
+    failures = 0
+    overlapping = 0
+    for hook in hooks:
+        hook_id = hook.get("id")
+        if type(hook_id) is not int or hook_id < 1 or type(hook.get("active")) is not bool:
+            raise ProbeError("invalid_response", "Webhook lacks a valid numeric ID or active flag")
+        if not hook["active"]:
+            row["evidence"].append({"summary": f"Hook {hook_id} is inactive now; incident-time configuration is unknown.", "url": url})
+            continue
+        deliveries = list_data(client.get(path + f"/hooks/{hook_id}/deliveries?per_page=30"))
+        if len(deliveries) > 30:
+            raise ProbeError("invalid_response", "Delivery summary sample exceeded requested bound")
+        hook_overlapping = 0
+        hook_failures = 0
+        for delivery in deliveries:
+            at = parsed(delivery.get("delivered_at"))
+            code = delivery.get("status_code")
+            if at is None or type(code) is not int or not (code == 0 or 100 <= code <= 599):
+                raise ProbeError("invalid_response", "Delivery summary lacks a valid timestamp or status code")
+            if start and start <= at <= now:
+                hook_overlapping += 1
+                hook_failures += int(code == 0 or code >= 400)
+        overlapping += hook_overlapping
+        failures += hook_failures
+        row["evidence"].append({
+            "summary": f"Hook {hook_id}: {len(deliveries)} delivery summaries sampled (first page only); "
+                       f"{hook_overlapping} incident-time attempts, {hook_failures} failed/no-response attempts. "
+                       "No payloads read; timestamps mark attempts, not event creation or delivery delay.",
+            "url": url,
+        })
+    row["reason"] = (
+        "Incident-time delivery failures observed; receiver, network and configuration failures prevent GitHub attribution"
+        if failures else
+        "Incident-time delivery summaries sampled; successful attempts cannot establish absence of impact"
+        if overlapping else
+        "No incident-time delivery evidence in the bounded repository-hook sample; missing events and other hook types remain unknown"
+    )
+
+
 def probe(client: ReadClient, repo: dict, component: dict, incident: dict, now: datetime) -> dict:
     adapter = adapter_for(component["name"])
     row = {
@@ -169,11 +221,14 @@ def probe(client: ReadClient, repo: dict, component: dict, incident: dict, now: 
         "evidence": [], "limitations": LIMITATIONS[adapter],
         "checked_at": None, "adapter": adapter, "error_kind": None,
     }
-    if adapter != "actions":
+    if adapter == "unsupported":
         row["checked_at"] = timestamp()
         return row
     try:
-        actions(client, repo, incident, row, now)
+        if adapter == "actions":
+            actions(client, repo, incident, row, now)
+        else:
+            webhooks(client, repo, incident, row, now)
     except ProbeError as error:
         row["error_kind"] = error.kind
         row["reason"] = error.message + "; impact is unknown"
@@ -208,13 +263,14 @@ def assess(
         state=inventory_state,
     )
     all_components = status["components"]
-    components = [part for part in all_components if adapter_for(part["name"]) == "actions"]
-    action_ids = {part["id"] for part in components}
-    if status_available and not components:
-        errors.append({"source": "status", "kind": "actions_component_missing",
-                       "message": "GitHub Status did not expose an Actions component; Actions coverage is unknown."})
+    components = [part for part in all_components if adapter_for(part["name"]) != "unsupported"]
+    assessed_ids = {part["id"] for part in components}
+    for name in ("Actions", "Webhooks"):
+        if status_available and not any(adapter_for(part["name"]) == name.casefold() for part in components):
+            errors.append({"source": "status", "kind": name.casefold() + "_component_missing",
+                           "message": f"GitHub Status did not expose a {name} component; {name} coverage is unknown."})
     incidents = [item for item in status["incidents"] if item.get("status") not in {"resolved", "postmortem"}
-                 and any(isinstance(part, dict) and part.get("id") in action_ids for part in item.get("components", []))]
+                 and any(isinstance(part, dict) and part.get("id") in assessed_ids for part in item.get("components", []))]
     mapped = []
     for incident in incidents:
         affected = {item.get("id") for item in incident.get("components", []) if isinstance(item, dict) and isinstance(item.get("id"), str)}
@@ -289,8 +345,8 @@ def assess(
         "started_at": started, "completed_at": timestamp(),
         "status_available": status_available,
         "status_updated_at": object_data(status.get("page", {})).get("updated_at"),
-        "status_description": ("Actions: " + ", ".join(sorted({part.get("status", "unknown") for part in components})))
-                              if components else "Actions status unavailable",
+        "status_description": "; ".join(f"{part['name']}: {part.get('status', 'unknown')}" for part in components)
+                              if components else "Actions and Webhooks status unavailable",
         "components": [{
             "id": component["id"], "name": component["name"],
             "status": component.get("status", "unknown"),
@@ -302,7 +358,7 @@ def assess(
             "status": item.get("status", "unknown"), "started_at": item.get("started_at") or item.get("created_at"),
             "updated_at": item.get("updated_at"),
             "url": "https://www.githubstatus.com/incidents/" + item["id"],
-            "components": [part.get("id") for part in item.get("components", []) if isinstance(part, dict) and part.get("id") in action_ids],
+            "components": [part.get("id") for part in item.get("components", []) if isinstance(part, dict) and part.get("id") in assessed_ids],
         } for item in incidents],
         "inventory": found, "checks": rows, "counts": counts, "errors": errors, "agent": agent_report,
         "observations": observation_report,

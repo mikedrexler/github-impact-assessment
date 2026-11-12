@@ -64,9 +64,9 @@
     <p class="muted">Manage repositories to assess in <a href="#configuration">Configuration</a>.</p>
     <section class="summary" aria-label="Assessment summary" id="summary"></section>
     <p class="principle">A status incident is not proof of tenant impact. Successful metadata reads are not proof you are unaffected. <strong>Unknown is an assessment, not an all-clear.</strong></p>
-    <section><h2>Unresolved Actions incidents</h2><div id="incidents"></div></section>
+    <section><h2>Unresolved Actions and Webhooks incidents</h2><div id="incidents"></div></section>
     <section><h2>Optional AI check planner</h2><div id="agent" class="panel"></div></section>
-    <section><h2>Actions status</h2><p class="muted">Only GitHub Actions is assessed. Other GitHub services are outside scope.</p><div id="components" class="grid"></div></section>
+    <section><h2>Actions and Webhooks status</h2><p class="muted">GitHub Actions and repository webhook delivery summaries are assessed. Other GitHub services are outside scope.</p><div id="components" class="grid"></div></section>
     <section><h2>Coverage &amp; freshness</h2><div id="coverage" class="panel"></div></section>
     <section>
       <h2>Continuous selected-repository observations</h2>
@@ -92,6 +92,6 @@
     <section><h2>Recent assessment history</h2><div id="history"></div></section>
     </div>
   </main>
-  <footer>Actions-only assessment. Credentials stay on this server. No workflow dispatch or repository writes. Selected-repository aggregate observations persist locally with bounded retention; detailed assessment history is memory-only. <a href="https://www.githubstatus.com" target="_blank" rel="noreferrer">GitHub Status</a></footer>
+  <footer>Actions and Webhooks assessment. Credentials stay on this server. No workflow dispatch, webhook pings/redeliveries or repository writes. Selected-repository Actions aggregate observations persist locally with bounded retention; detailed assessment history is memory-only. <a href="https://www.githubstatus.com" target="_blank" rel="noreferrer">GitHub Status</a></footer>
 </body>
 </html>
