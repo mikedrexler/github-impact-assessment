@@ -31,6 +31,11 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(rows[0]["components"], ["Actions"])
         self.assertEqual(rows[1]["components"], ["Webhooks"])
 
+    def test_public_incident_impact_is_retained_separately_from_tenant_classification(self):
+        rows = project_incidents({"incidents": [incident(impact="major")]})
+        self.assertEqual(rows[0]["impact"], "major")
+        self.assertNotIn("classification", rows[0])
+
     def test_public_history_never_receives_credentials(self):
         opener = Opener(Response({"incidents": [incident()]}))
         client = Client("sentinel-private-token", Config(), threading.Event(), opener=opener)

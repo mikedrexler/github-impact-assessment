@@ -30,6 +30,7 @@ class WebhookTests(unittest.TestCase):
         client = webhook_client()
         row = probe(client, REPO, WEBHOOKS, INCIDENT, NOW)
         self.assertEqual(row["classification"], "unknown")
+        self.assertEqual(row["severity"], "degraded")
         self.assertIn("Incident-time delivery failures", row["reason"])
         self.assertIn("receiver, network and configuration", row["reason"])
         self.assertNotIn("sentinel", json.dumps(row))
@@ -50,6 +51,7 @@ class WebhookTests(unittest.TestCase):
             with self.subTest(deliveries=deliveries, incident=incident):
                 row = probe(webhook_client(deliveries=deliveries), REPO, WEBHOOKS, incident, NOW)
                 self.assertEqual(row["classification"], "unknown")
+                self.assertEqual(row["severity"], "none")
                 self.assertNotIn("delivery failures observed", row["reason"])
                 self.assertNotIn("unaffected", json.dumps(row))
 
@@ -83,6 +85,7 @@ class WebhookTests(unittest.TestCase):
                 row = probe(client, REPO, WEBHOOKS, INCIDENT, NOW)
                 self.assertEqual(row["classification"], "unknown")
                 self.assertEqual(row["error_kind"], kind)
+                self.assertEqual(row["severity"], "none")
                 self.assertIsNotNone(row["checked_at"])
 
     def test_malformed_hook_ids_cannot_construct_paths(self):
@@ -92,6 +95,19 @@ class WebhookTests(unittest.TestCase):
             row = probe(client, REPO, WEBHOOKS, INCIDENT, NOW)
             self.assertEqual(row["error_kind"], "invalid_response")
             self.assertEqual(len(client.calls), 1)
+
+    def test_degradation_signal_survives_later_permission_gap_without_becoming_outage(self):
+        client = webhook_client(hooks=[HOOK, {**HOOK, "id": 8}])
+        client.responses = {
+            "/hooks?": [HOOK, {**HOOK, "id": 8}],
+            "/hooks/7/deliveries?": [DELIVERY],
+            "/hooks/8/deliveries?": ProbeError("permission_or_secondary_limit", "Cannot read"),
+        }
+        row = probe(client, REPO, WEBHOOKS, INCIDENT, NOW)
+        self.assertEqual(row["classification"], "unknown")
+        self.assertEqual(row["error_kind"], "permission_or_secondary_limit")
+        self.assertEqual(row["severity"], "degraded")
+        self.assertTrue(any("1 failed/no-response" in item["summary"] for item in row["evidence"]))
 
     def test_malformed_or_oversized_samples_remain_unknown(self):
         for endpoint, value in [

@@ -22,8 +22,23 @@ function date(value) {
   const parsed = new Date(value);
   return value && !Number.isNaN(parsed.valueOf()) ? parsed.toLocaleString() : "unknown";
 }
-function badge(value) {
+function statusSeverity(value) {
+  if (["partial_outage", "major_outage", "major", "critical", "confirmed"].includes(value)) return "red";
+  if (["degraded_performance", "minor", "suspected", "elevated_queue_sample"].includes(value)) return "yellow";
+  return "green";
+}
+function assessmentSeverity(row) {
+  if (row.severity === "outage" || row.classification === "confirmed") return "red";
+  if (row.severity === "degraded" || row.classification === "suspected") return "yellow";
+  return "green";
+}
+function severityBadge(severity) {
+  const labels = {red: "Likely outage", yellow: "Degradation signal", green: "No degradation signal"};
+  const color = Object.hasOwn(labels, severity) ? severity : "green";
+  return node("span", labels[color], `badge severity-signal signal-${color}`);
+}
+function badge(value, severity = statusSeverity(value)) {
   const allowed = ["confirmed", "suspected", "unknown", "not-applicable", "operational", "degraded_performance", "partial_outage", "major_outage"];
-  return node("span", value.replaceAll("_", " "), `badge ${allowed.includes(value) ? value : "unknown"}`);
+  return node("span", value.replaceAll("_", " "), `badge severity-signal signal-${severity} ${allowed.includes(value) ? value : "unknown"}`);
 }
 function paragraph(parent, text, cls) { parent.append(node("p", text, cls)); }

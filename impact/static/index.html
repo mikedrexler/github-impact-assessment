@@ -64,6 +64,7 @@
     <p class="muted">Manage repositories to assess in <a href="#configuration">Configuration</a>.</p>
     <section class="summary" aria-label="Assessment summary" id="summary"></section>
     <p class="principle">A status incident is not proof of tenant impact. Successful metadata reads are not proof you are unaffected. <strong>Unknown is an assessment, not an all-clear.</strong></p>
+    <p class="severity-legend"><span class="severity-signal signal-yellow">Yellow: degradation signal</span> | <span class="severity-signal signal-red">Red: likely outage</span> | <span class="severity-signal signal-green">Green: remainder / no degradation signal</span>. Green includes unknown, missing and stale evidence; it does not mean healthy or unaffected. Public Status colors describe GitHub's report, not confirmed tenant impact.</p>
     <section><h2>Unresolved Actions and Webhooks incidents</h2><div id="incidents"></div></section>
     <section><h2>Optional AI check planner</h2><div id="agent" class="panel"></div></section>
     <section><h2>Actions and Webhooks status</h2><p class="muted">GitHub Actions and repository webhook delivery summaries are assessed. Other GitHub services are outside scope.</p><div id="components" class="grid"></div></section>

@@ -18,10 +18,11 @@ function renderPast() {
       $("past-incidents").append(node("h2", day, "incident-date"));
       priorDay = day;
     }
-    const card = node("article", undefined, "incident");
+    const card = node("article", undefined, `incident signal-${statusSeverity(item.impact)}`);
     const title = node("h3");
     title.append(link(item.name, item.url));
     card.append(title, badge(item.status));
+    paragraph(card, `Public incident impact: ${item.impact || "not reported"} (not tenant impact)`, "muted");
     paragraph(card, `Started ${date(item.started_at)} | Resolved ${date(item.resolved_at)}`);
     paragraph(card, `Affected components: ${item.components.join(", ") || "Not specified"}`, "muted");
     const assessment = item.assessment;
@@ -34,8 +35,11 @@ function renderPast() {
       paragraph(observed, `Observed ${date(assessment.completed_at)}; ${assessment.inventory_discovered} repositories known then. ${assessment.checks.length} repository/component rows: ${Object.entries(assessment.counts).map(([key, count]) => `${count} ${key}`).join(", ")}.`);
       paragraph(observed, `${assessment.coverage.complete ? "Bounded cycle complete" : "PARTIAL coverage"}; ${assessment.coverage.repositories_deferred} repositories and ${assessment.coverage.assessments_deferred} assessment rows deferred across that cycle. These are historical observations, not current health or proof of GitHub causation.`, "muted");
       for (const row of assessment.checks) {
-        const detail = node("details", undefined, "history-row");
-        detail.append(node("summary", `${row.repository} / ${row.component}: ${row.classification}`));
+        const severity = assessmentSeverity(row);
+        const detail = node("details", undefined, `history-row signal-${severity}`);
+        const summary = node("summary", `${row.repository} / ${row.component}: ${row.classification} `);
+        summary.append(severityBadge(severity));
+        detail.append(summary);
         paragraph(detail, row.reason);
         if (row.error_kind) paragraph(detail, `Probe error: ${row.error_kind}`, "error");
         for (const evidence of row.evidence) {

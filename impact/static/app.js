@@ -143,13 +143,14 @@ function renderChecks() {
     && `${row.repository} ${row.component} ${row.classification} ${row.reason}`.toLowerCase().includes(query));
   $("checks").replaceChildren();
   for (const row of rows.slice(0, visible)) {
-    const tr = node("tr");
+    const severity = assessmentSeverity(row);
+    const tr = node("tr", undefined, `assessment-row signal-${severity}`);
     const repo = node("td");
     repo.append(link(row.repository, row.repository_url));
     paragraph(repo, row.component);
     paragraph(repo, row.incident, "muted");
     const classification = node("td");
-    classification.append(badge(row.classification));
+    classification.append(badge(row.classification, severity), node("br"), severityBadge(severity));
     paragraph(classification, row.reason);
     if (row.error_kind) paragraph(classification, `Probe error: ${row.error_kind}`, "error");
     const evidence = node("td");
@@ -199,7 +200,11 @@ function renderObservations() {
     const details = node("details");
     const sample = row.sample;
     const gap = row.gap || (!fresh(row) ? "stale" : null);
-    details.append(node("summary", `${row.repository}: ${gap || "run-list observed"} | ${gap ? "observation_unavailable" : row.signal}`));
+    const severity = gap ? "green" : statusSeverity(row.signal);
+    details.className = `history-row signal-${severity}`;
+    const summary = node("summary", `${row.repository}: ${gap || "run-list observed"} | ${gap ? "observation_unavailable" : row.signal} `);
+    summary.append(severityBadge(severity));
+    details.append(summary);
     paragraph(details, `Last attempt ${sample ? date(new Date(sample.at * 1000).toISOString()) : "never"}; outcome ${sample?.outcome || "none"}. Metadata available: ${row.metadata_available ? "yes (cached validation)" : "no"}. Baseline samples ${row.baseline_samples}; median queued runs ${row.baseline_median_queued_runs ?? "insufficient"}.`);
     if (sample?.outcome === "observed") paragraph(details, `Sample: ${sample.sampled_runs} runs, ${sample.queued_runs} queued/waiting, oldest queued creation age ${sample.oldest_queued_age_seconds ?? "unknown"}s; ${sample.failed_runs}/${sample.completed_runs} completed sampled runs failed/timed out. ${sample.sample_partial ? "Partial run history." : "Returned run-list sample only."} This is not a failure rate or a functional success test.`);
     paragraph(details, `${row.incident_overlap && fresh(row) ? "Sample collected during a mapped Actions incident." : "No fresh mapped Actions incident overlap established."} Queue increases and run failures have multiple possible causes. Other feature functionality remains unverified.`, "muted");
@@ -251,8 +256,10 @@ function render() {
   }
   $("incidents").replaceChildren();
   for (const incident of report.incidents) {
-    const card = node("article", undefined, "incident");
+    const severity = statusSeverity(incident.impact);
+    const card = node("article", undefined, `incident signal-${severity}`);
     card.append(link(incident.name, incident.url));
+    paragraph(card, `Public incident impact: ${incident.impact || "not reported"} (not tenant impact)`, "muted");
     paragraph(card, `${incident.status} | Started ${date(incident.started_at)} | Updated ${date(incident.updated_at)}`, "muted");
     paragraph(card, `Affected components: ${incident.components.map((id) => report.components.find((part) => part.id === id)?.name || id).join(", ") || "unscoped - unknown"}`);
     $("incidents").append(card);
@@ -278,7 +285,7 @@ function render() {
   }
   $("components").replaceChildren();
   for (const part of report.components) {
-    const card = node("article", undefined, "component");
+    const card = node("article", undefined, `component signal-${statusSeverity(part.status)}`);
     card.append(node("h3", part.name), badge(part.status));
     paragraph(card, `Adapter: ${part.adapter}`, "muted");
     paragraph(card, part.limitations);

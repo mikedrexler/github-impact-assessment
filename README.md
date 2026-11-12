@@ -183,6 +183,8 @@ Webhook samples are explicitly first-page-only (at most four logical reads per r
 
 Classifications:
 
+The dashboard uses traffic-light colors on repository assessments, component status, public incident cards and continuous observation signals. **Yellow** indicates degradation: a suspected Actions queue symptom, incident-time webhook delivery failures, a fresh elevated-queue observation, or public Status `degraded_performance` / minor incident impact. **Red** indicates a likely outage: public Status `partial_outage` / `major_outage`, major/critical public incident impact, or an explicitly outage/confirmed assessment (no current tenant adapter emits one). **Green** is the remainder, including unknown, inaccessible, missing or stale evidence, and means **no degradation signal established**, not healthy/unaffected. Classification, access errors, freshness and limitations remain visible independently of color. Public Status colors describe the platform's report, never proof of tenant impact; failed application tests do not become red assessments. The structured assessment `severity` field (`none`, `degraded`; `outage` reserved) is separate from impact classification. Webhook delivery failures stay **unknown** even when colored yellow.
+
 | Classification | Meaning |
 |---|---|
 | **confirmed** | Reserved for direct attributable tenant impact. **No current adapter emits this**; available evidence cannot responsibly prove GitHub causation. |

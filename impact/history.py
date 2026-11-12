@@ -34,6 +34,7 @@ def project_incidents(data: dict) -> list[dict]:
             continue
         result.append({
             "id": identity, "name": item.get("name", "Unnamed incident"),
+            "impact": item.get("impact", "none"),
             "status": item["status"],
             "started_at": item.get("started_at") or item.get("created_at"),
             "resolved_at": item.get("resolved_at"), "updated_at": item.get("updated_at"),

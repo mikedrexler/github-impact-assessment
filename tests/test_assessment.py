@@ -198,6 +198,7 @@ class AssessmentTests(unittest.TestCase):
         }, checks=[{"conclusion": "failure"}])
         row = probe(client, REPO, COMPONENT, INCIDENT, NOW)
         self.assertEqual(row["classification"], "unknown")
+        self.assertEqual(row["severity"], "none")
         self.assertTrue(any("not attributed" in item["summary"] for item in row["evidence"]))
         self.assertTrue(any("external apps" in item["summary"] for item in row["evidence"]))
 
@@ -213,6 +214,7 @@ class AssessmentTests(unittest.TestCase):
                 client = action_client(jobs=[{"id": 2, "status": "queued", "created_at": created, "labels": labels}])
                 row = probe(client, REPO, COMPONENT, INCIDENT, NOW)
                 self.assertEqual(row["classification"], expected)
+                self.assertEqual(row["severity"], "degraded" if expected == "suspected" else "none")
                 if expected == "suspected":
                     self.assertTrue(any("not continuous queue duration" in item["summary"] for item in row["evidence"]))
 
@@ -256,6 +258,7 @@ class AssessmentTests(unittest.TestCase):
             row = probe(client, REPO, COMPONENT, INCIDENT, NOW)
             self.assertEqual(row["classification"], "unknown")
             self.assertEqual(row["error_kind"], kind)
+            self.assertEqual(row["severity"], "none")
             self.assertIsNotNone(row["checked_at"])
 
     def test_demo_covers_queue_self_hosted_and_permissions(self):

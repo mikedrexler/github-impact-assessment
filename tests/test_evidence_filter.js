@@ -146,6 +146,81 @@ test("repository option labels are plain text, never HTML", () => {
   assert.equal(app.element("evidence-repository").options[1].value, name);
 });
 
+test("assessment severity uses structured signals, never failure text or unknown as outage", () => {
+  const rows = [
+    {...row("org/degraded"), severity: "degraded"},
+    row("org/suspected", "Actions", "suspected"),
+    {...row("org/outage"), severity: "outage"},
+    row("org/confirmed", "Actions", "confirmed"),
+    {...row("org/unknown"), reason: "outage failure degraded", error_kind: "service_error"},
+    row("org/not-applicable", "Actions", "not-applicable"),
+    {...row("org/invalid"), severity: "<script>red</script>"},
+  ];
+  const app = dashboard(rows);
+  const colors = ["yellow", "yellow", "red", "red", "green", "green", "green"];
+  app.element("checks").children.forEach((tr, index) => {
+    assert.equal(tr.className, `assessment-row signal-${colors[index]}`);
+    assert.match(tr.children[1].children[0].className, new RegExp(`signal-${colors[index]}`));
+    const indicator = tr.children[1].children[2];
+    assert.equal(indicator.textContent, colors[index] === "red" ? "Likely outage"
+      : colors[index] === "yellow" ? "Degradation signal" : "No degradation signal");
+  });
+  assert.equal(app.element("checks").children[0].children[1].children[0].textContent, "unknown");
+});
+
+test("public status outages are red, degradation yellow, and all other badges green", () => {
+  const app = dashboard();
+  for (const [status, color] of [
+    ["major_outage", "red"], ["partial_outage", "red"], ["major", "red"], ["critical", "red"],
+    ["degraded_performance", "yellow"], ["minor", "yellow"],
+    ["operational", "green"], ["unknown", "green"], ["resolved", "green"], ["maintenance", "green"],
+  ]) {
+    assert.equal(app.run(`statusSeverity(${JSON.stringify(status)})`), color);
+    assert.match(app.run(`badge(${JSON.stringify(status)}).className`), new RegExp(`signal-${color}`));
+  }
+});
+
+test("past evidence and live evidence share colors with a green uncertainty warning", () => {
+  const app = dashboard();
+  const past = readFileSync(join(__dirname, "../impact/static/past.js"), "utf8");
+  assert.match(past, /assessmentSeverity\(row\)/);
+  assert.match(past, /severityBadge\(severity\)/);
+  for (const page of ["index.html", "past-incidents.html"]) {
+    const html = readFileSync(join(__dirname, "../impact/static", page), "utf8");
+    assert.match(html, /Yellow: degradation signal/);
+    assert.match(html, /Red: likely outage/);
+    assert.match(html, /Green includes unknown, missing and stale evidence/);
+  }
+  const css = readFileSync(join(__dirname, "../impact/static/style.css"), "utf8");
+  assert.match(css, /\.signal-yellow\{--signal-color:#e3b341\}/);
+  assert.match(css, /\.signal-red\{--signal-color:#f85149\}/);
+  assert.match(css, /\.severity-signal\{color:var\(--signal-color\)\}/);
+  assert.equal(app.run("assessmentSeverity({classification:'unknown'})"), "green");
+});
+
+test("past incident renderer preserves public impact and colors recorded assessments independently", () => {
+  const app = dashboard();
+  app.run(readFileSync(join(__dirname, "../impact/static/past.js"), "utf8"));
+  app.run(`historyState = {scope:"Fixture", available:true, incidents:[{
+    id:"past",name:"Historical outage",url:"https://www.githubstatus.com/incidents/past",
+    status:"resolved",impact:"major",components:["Actions","Webhooks"],updates:[],
+    assessment:{counts:{suspected:1,unknown:1},checks:[
+      {repository:"org/a",component:"Actions",classification:"suspected",severity:"degraded",evidence:[]},
+      {repository:"org/b",component:"Webhooks",classification:"unknown",severity:"none",error_kind:"permission",evidence:[]}
+    ],coverage:{complete:false}}
+  }]}; renderPast();`);
+  const card = app.element("past-incidents").children[1];
+  assert.equal(card.className, "incident signal-red");
+  assert.equal(card.children[1].textContent, "resolved");
+  const recorded = card.children.find(child => child.tag === "details");
+  const rows = recorded.children.filter(child => child.tag === "details");
+  assert.equal(rows[0].className, "history-row signal-yellow");
+  assert.equal(rows[0].children[0].children[0].textContent, "Degradation signal");
+  assert.equal(rows[1].className, "history-row signal-green");
+  assert.match(rows[1].children[0].textContent, /unknown/);
+  assert.equal(rows[1].children[0].children[0].textContent, "No degradation signal");
+});
+
 test("owner-filtered writable multi-select adds chosen results only on explicit Add", () => {
   const app = dashboard();
   app.element("repository-organization").value = "org";
@@ -386,6 +461,21 @@ test("continuous coverage renders budget deferrals, missing metadata and insuffi
   assert.match(panel.children[4].children[0].textContent, /stale/);
   app.run(`state.latest.observations = {enabled:false,error:"Storage failed; coverage unavailable"}; renderObservations();`);
   assert.match(panel.children[1].textContent, /Storage failed/);
+});
+
+test("only fresh elevated queue observations are yellow; stale and missing remain green and labeled", () => {
+  const app = dashboard();
+  app.run(`state.latest.observations = {enabled:true,selected:3,fresh_seconds:900,batch_size:20,rows:[
+    {repository:"org/elevated",fresh:true,gap:null,sample:{at:Date.now()/1000,outcome:"observed"},signal:"elevated_queue_sample",recent_incident_samples:[]},
+    {repository:"org/stale",fresh:false,gap:null,sample:{at:Date.now()/1000-1000,outcome:"observed"},signal:"elevated_queue_sample",recent_incident_samples:[]},
+    {repository:"org/missing",fresh:false,gap:"metadata_unavailable",sample:null,signal:"observation_unavailable",recent_incident_samples:[]}
+  ]}; renderObservations();`);
+  const rows = app.element("observations").children.slice(-3);
+  assert.equal(rows[0].className, "history-row signal-yellow");
+  assert.equal(rows[1].className, "history-row signal-green");
+  assert.match(rows[1].children[0].textContent, /stale/);
+  assert.equal(rows[2].className, "history-row signal-green");
+  assert.match(rows[2].children[0].textContent, /metadata_unavailable/);
 });
 
 test("writable picker spans all owner types, filters locally and excludes unverified permissions", () => {

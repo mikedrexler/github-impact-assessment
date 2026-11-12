@@ -143,6 +143,7 @@ def actions(client: ReadClient, repo: dict, incident: dict, row: dict, now: date
                 })
                 if not self_hosted:
                     suspected = True
+                    row["severity"] = "degraded"
         sha = run.get("head_sha")
         if isinstance(sha, str) and re.fullmatch(r"[a-fA-F0-9]{40,64}", sha):
             checks = object_data(client.get(path + f"/commits/{sha}/check-runs?per_page=100&page=1"))
@@ -196,6 +197,8 @@ def webhooks(client: ReadClient, repo: dict, incident: dict, row: dict, now: dat
                 hook_failures += int(code == 0 or code >= 400)
         overlapping += hook_overlapping
         failures += hook_failures
+        if hook_failures:
+            row["severity"] = "degraded"
         row["evidence"].append({
             "summary": f"Hook {hook_id}: {len(deliveries)} delivery summaries sampled (first page only); "
                        f"{hook_overlapping} incident-time attempts, {hook_failures} failed/no-response attempts. "
@@ -217,7 +220,7 @@ def probe(client: ReadClient, repo: dict, component: dict, incident: dict, now: 
         "repository": repo["name"], "repository_url": repo["url"],
         "component_id": component["id"], "component": component["name"],
         "incident_id": incident["id"], "incident": incident.get("name", "Unnamed incident"),
-        "classification": "unknown", "reason": LIMITATIONS[adapter],
+        "classification": "unknown", "severity": "none", "reason": LIMITATIONS[adapter],
         "evidence": [], "limitations": LIMITATIONS[adapter],
         "checked_at": None, "adapter": adapter, "error_kind": None,
     }
@@ -355,6 +358,7 @@ def assess(
         } for component in components],
         "incidents": [{
             "id": item["id"], "name": item.get("name", "Unnamed incident"),
+            "impact": item.get("impact", "none"),
             "status": item.get("status", "unknown"), "started_at": item.get("started_at") or item.get("created_at"),
             "updated_at": item.get("updated_at"),
             "url": "https://www.githubstatus.com/incidents/" + item["id"],
