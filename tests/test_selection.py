@@ -63,6 +63,21 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(report["next_repository"], 1)
         self.assertFalse(report["complete"])
 
+    def test_pacing_deferral_preserves_selected_cursor_for_retry(self):
+        state = InventoryState()
+        client = FixtureClient({
+            "/repos/org/one": {"full_name": "org/one"},
+            "/repos/org/two": ProbeError("request_pacing", "Queued for next batch"),
+        })
+        report = inventory(client, selected=("org/one", "org/two"), state=state)
+        self.assertEqual(report["next_repository"], 2)
+        self.assertEqual(report["reason"]["kind"], "request_pacing")
+        self.assertEqual(report["repository_errors"], [])
+        resumed = FixtureClient({"/repos/org/two": {"full_name": "org/two"}})
+        report = inventory(resumed, selected=("org/one", "org/two"), state=state)
+        self.assertTrue(report["complete"])
+        self.assertEqual(resumed.calls, ["/repos/org/two"])
+
     def test_failed_or_renamed_selected_repositories_are_visible_gaps(self):
         for invalid in [
             {}, [], {"full_name": "other/repo"},

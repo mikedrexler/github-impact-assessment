@@ -152,7 +152,7 @@ class Observations:
             record = {"repository": name, "at": now, **sample}
             records.append(record)
             latest[name.casefold()] = record
-            if sample["outcome"] in {"rate_limit", "request_limit", "deadline", "cancelled", "authentication"}:
+            if sample["outcome"] in {"rate_limit", "request_limit", "request_pacing", "deadline", "cancelled", "authentication"}:
                 break
         rows = []
         incident_starts = [parsed(incident.get("started_at") or incident.get("created_at")) for incident in active]

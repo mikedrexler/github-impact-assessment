@@ -179,20 +179,23 @@ class MonitorTests(unittest.TestCase):
     def test_only_budget_checkpoints_use_fast_continuation(self):
         for kind, fast in [
             ("inventory_deadline", True), ("inventory_request_limit", True),
-            ("deadline", True), ("request_limit", True),
+            ("deadline", True), ("request_limit", True), ("request_pacing", True),
             ("inventory_limit", False), ("authentication", False),
             ("permission_or_secondary_limit", False), ("network", False),
         ]:
             with self.subTest(kind=kind):
                 monitor = Monitor(Config(), client_factory=DemoClient)
-                with patch("impact.monitor.inventory", return_value={"reason": {"kind": kind}, "complete": False}):
+                with patch("impact.monitor.inventory", return_value={"reason": {"kind": kind, "message": "Deferred discovery"}, "complete": False}):
                     monitor._discover()
                 remaining = monitor._discovery_due - time.monotonic()
                 self.assertAlmostEqual(remaining, 5 if fast else 300, delta=0.5)
                 if fast:
                     reason = monitor.snapshot()["discovery"]["latest"]["reason"]
-                    self.assertIn("checkpoint saved", reason["message"])
-                    self.assertIn("after 5s", reason["message"])
+                    if kind != "request_pacing":
+                        self.assertIn("checkpoint saved", reason["message"])
+                        self.assertIn("after 5s", reason["message"])
+                    else:
+                        self.assertEqual(reason["kind"], "request_pacing")
                     self.assertNotIn("Assessment", reason["message"])
 
     def test_discovery_rate_limit_honors_shared_cooldown(self):
@@ -201,6 +204,16 @@ class MonitorTests(unittest.TestCase):
         with patch("impact.monitor.inventory", return_value={"reason": {"kind": "rate_limit"}, "complete": False}):
             monitor._discover()
         self.assertGreaterEqual(monitor._discovery_due, monitor._backoff.until)
+
+    def test_paced_owner_and_catalog_loading_use_checkpoint_resume_not_poll_delay(self):
+        monitor = Monitor(Config(), client_factory=DemoClient)
+        reason = {"kind": "request_pacing", "message": "Deferred by local pacing"}
+        with patch("impact.monitor.organizations", return_value={"reason": reason, "finished": False}):
+            monitor._load_organizations()
+        self.assertAlmostEqual(monitor._organizations_due - time.monotonic(), 5, delta=0.5)
+        with patch("impact.monitor.inventory", return_value={"reason": reason, "complete": False}):
+            monitor._discover_organization()
+        self.assertAlmostEqual(monitor._organization_due - time.monotonic(), 5, delta=0.5)
 
     @patch("impact.monitor.credentials")
     @patch("impact.monitor.Client")

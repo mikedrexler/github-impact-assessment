@@ -16,7 +16,7 @@ from impact.client import Client, Config, ProbeError
 from impact.demo import DemoClient
 from impact.monitor import Monitor
 from tests.test_assessment import COMPONENT, INCIDENT, NOW, REPO, FixtureClient, action_client
-from tests.test_client import Opener, Response
+from tests.test_client import FakeClock, Opener, Response
 
 SCOPED_INCIDENT = {**INCIDENT, "status": "investigating", "components": [COMPONENT]}
 
@@ -376,7 +376,8 @@ class ProviderTests(unittest.TestCase):
     def test_planner_github_reads_share_cycle_budget_and_do_not_retry(self):
         error = urllib.error.HTTPError("https://api.github.com/repos/a/b", 503, "secret", {}, io.BytesIO(b"secret"))
         opener = Opener(error, Response({}))
-        client = Client("github-secret", Config(max_requests=2), threading.Event(), opener=opener, clock=lambda: 10)
+        clock = FakeClock()
+        client = Client("github-secret", Config(max_requests=2), clock, opener=opener, clock=clock)
         with self.assertRaises(ProbeError):
             client.get_once("/repos/a/b", 12)
         self.assertEqual(client.requests, 1)

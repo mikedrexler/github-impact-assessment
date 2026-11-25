@@ -463,6 +463,25 @@ test("continuous coverage renders budget deferrals, missing metadata and insuffi
   assert.match(panel.children[1].textContent, /Storage failed/);
 });
 
+test("local pacing is displayed separately from GitHub limits and deferred probes remain unknown", () => {
+  const app = dashboard([
+    {...row("org/queued"), error_kind: "request_pacing", reason: "Queued for a later cycle"},
+    {...row("org/provider-limit"), error_kind: "rate_limit", reason: "GitHub API rate limited"},
+  ]);
+  const checks = app.element("checks").children;
+  assert.equal(checks[0].className, "assessment-row signal-green");
+  assert.match(checks[0].children[1].children.at(-1).textContent, /Probe deferred: request_pacing/);
+  assert.match(checks[1].children[1].children.at(-1).textContent, /Probe error: rate_limit/);
+  app.run(`state.config = {github_requests_hour:600,github_requests_minute:30};
+    state.rate_budget = {attempts_last_hour:5,provider_remaining_estimate:1000,deferred_seconds:0,
+      pacing_interval_seconds:6,pacing_seconds:4}; renderObservations();`);
+  const panel = app.element("observations");
+  assert.match(panel.children[0].textContent, /No current rate-budget deferral/);
+  assert.match(panel.children[1].textContent, /every 6.00 seconds/);
+  assert.match(panel.children[1].textContent, /Next slot in 4s/);
+  assert.match(panel.children[1].textContent, /not a repository failure/);
+});
+
 test("only fresh elevated queue observations are yellow; stale and missing remain green and labeled", () => {
   const app = dashboard();
   app.run(`state.latest.observations = {enabled:true,selected:3,fresh_seconds:900,batch_size:20,rows:[

@@ -152,7 +152,7 @@ function renderChecks() {
     const classification = node("td");
     classification.append(badge(row.classification, severity), node("br"), severityBadge(severity));
     paragraph(classification, row.reason);
-    if (row.error_kind) paragraph(classification, `Probe error: ${row.error_kind}`, "error");
+    if (row.error_kind) paragraph(classification, `Probe ${row.error_kind === "request_pacing" ? "deferred" : "error"}: ${row.error_kind}`, row.error_kind === "request_pacing" ? "warning" : "error");
     const evidence = node("td");
     for (const item of row.evidence) {
       const p = node("p");
@@ -184,6 +184,7 @@ function renderObservations() {
   panel.replaceChildren();
   const budget = state.rate_budget;
   if (budget) paragraph(panel, `Shared GitHub request budget: ${state.config.github_requests_hour}/hour, ${state.config.github_requests_minute}/minute. ${budget.attempts_last_hour} attempts this hour; provider remaining estimate ${budget.provider_remaining_estimate ?? "not reported"}. ${budget.deferred_seconds ? `DEFERRED for ${budget.deferred_seconds}s (${budget.reason}).` : "No current rate-budget deferral."} Other clients can consume the same credential quota; limits cannot be guaranteed externally.`, budget.deferred_seconds ? "warning" : "muted");
+  if (budget?.pacing_interval_seconds) paragraph(panel, `Local request pacing: at most one GitHub attempt every ${budget.pacing_interval_seconds.toFixed(2)} seconds across discovery, probes, observations and retries. Next slot in ${budget.pacing_seconds}s. Work that cannot fit this cycle is deferred, not a repository failure.`, "muted");
   const report = state.latest?.observations;
   if (!report?.enabled) {
     paragraph(panel, report?.error || report?.reason || "Continuous observations pending.", report?.error ? "error" : "muted");
@@ -301,10 +302,10 @@ function render() {
   paragraph($("coverage"), known.scope);
   paragraph($("coverage"), known.access_caveat, "error");
   if (known.reason) {
-    const checkpoint = ["inventory_deadline", "inventory_request_limit", "deadline", "request_limit"].includes(known.reason.kind);
+    const checkpoint = ["inventory_deadline", "inventory_request_limit", "deadline", "request_limit", "request_pacing"].includes(known.reason.kind);
     paragraph($("coverage"), `${checkpoint ? "Checkpoint saved" : known.reason.kind}: ${known.reason.message}`, checkpoint || known.reason.kind === "scope_paused" ? "muted" : "error");
   }
-  paragraph($("coverage"), `Last assessment used ${report.inventory.discovered} repositories known at that time: ${report.coverage.repositories_selected} selected; ${report.coverage.repositories_deferred} repositories / ${report.coverage.assessments_deferred} assessments deferred; ${report.coverage.check_errors} probe errors. Newly discovered repositories enter subsequent assessments, not this historical snapshot.`);
+  paragraph($("coverage"), `Last assessment used ${report.inventory.discovered} repositories known at that time: ${report.coverage.repositories_selected} selected; ${report.coverage.repositories_deferred} repositories / ${report.coverage.assessments_deferred} assessments deferred; ${report.coverage.check_errors} probes unavailable or deferred. Newly discovered repositories enter subsequent assessments, not this historical snapshot.`);
   for (const error of report.errors) paragraph($("coverage"), `${error.source} / ${error.kind}: ${error.message}`, "error");
   paragraph($("coverage"), `${report.coverage.complete ? "Bounded cycle complete" : "PARTIAL / limited coverage"}. ${report.coverage.note}`);
   paragraph($("coverage"), `Snapshot ${date(report.completed_at)} (${Math.floor(age)}s ago); cycle started ${date(report.started_at)}. Status feed updated ${date(report.status_updated_at)}. Next poll ${state.busy ? "after current assessment" : date(state.next_poll_at)}.`);

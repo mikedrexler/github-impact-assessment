@@ -14,32 +14,35 @@ from impact.client import Client, Backoff, Config, ProbeError
 from impact.demo import DemoClient
 from impact.monitor import Monitor
 from impact.observations import ObservationStore, Observations, metrics, FRESH_SECONDS
-from tests.test_client import Opener, Response, NoWait, http_error
+from tests.test_client import FakeClock, Opener, Response, NoWait, http_error
 
 
 class BudgetTests(unittest.TestCase):
     def test_minute_budget_shared_by_discovery_assessment_and_planner(self):
         guard = Backoff()
-        opener = Opener(Response({}), Response({}))
+        clock = FakeClock()
+        opener = Opener(Response({}), Response({}), Response({}))
         config = Config(github_requests_minute=2)
-        first = Client("test", config, NoWait(), opener=opener, backoff=guard, clock=lambda: 10)
-        second = Client("test", config, NoWait(), opener=opener, backoff=guard, clock=lambda: 10)
+        first = Client("test", config, clock, opener=opener, backoff=guard, clock=clock)
+        second = Client("test", config, clock, opener=opener, backoff=guard, clock=clock)
         first.get("/repos/org/a")
         second.get_once("/repos/org/b", 100)
-        with self.assertRaises(ProbeError) as error:
-            first.get("/repos/org/c")
-        self.assertEqual(error.exception.kind, "rate_limit")
-        self.assertEqual(len(opener.calls), 2)
-        self.assertEqual(guard.until, 70)
-        self.assertEqual(guard.reason, "local_request_budget")
+        first.get("/repos/org/c")
+        self.assertEqual(list(guard.admissions), [10, 40, 70])
+        self.assertEqual(clock.waits, [30, 30])
+        self.assertEqual(len(opener.calls), 3)
+        self.assertEqual(guard.until, 0)
+        self.assertIsNone(guard.reason)
 
     def test_hourly_budget_does_not_reset_with_client_or_minute(self):
         guard = Backoff()
         config = Config(github_requests_hour=1)
         opener = Opener(Response({}), Response({}))
         Client("test", config, NoWait(), opener=opener, backoff=guard, clock=lambda: 10).get("/user")
-        with self.assertRaises(ProbeError):
+        with self.assertRaises(ProbeError) as error:
             Client("test", config, NoWait(), opener=opener, backoff=guard, clock=lambda: 100).get("/user")
+        self.assertEqual(error.exception.kind, "request_pacing")
+        self.assertEqual(len(guard.admissions), 1)
         Client("test", config, NoWait(), opener=opener, backoff=guard, clock=lambda: 3610).get("/user")
         self.assertEqual(len(opener.calls), 2)
 
@@ -69,14 +72,15 @@ class BudgetTests(unittest.TestCase):
 
     def test_retry_attempts_are_charged_and_public_status_does_not_use_github_budget(self):
         guard = Backoff()
+        clock = FakeClock()
         config = Config(github_requests_minute=1)
-        opener = Opener(http_error(503), Response({"components": [], "incidents": []}))
-        client = Client("test", config, NoWait(), opener=opener, backoff=guard)
-        with self.assertRaises(ProbeError) as error:
-            client.get("/user")
-        self.assertEqual(error.exception.kind, "rate_limit")
+        opener = Opener(http_error(503), Response({}), Response({"components": [], "incidents": []}))
+        client = Client("test", config, clock, opener=opener, backoff=guard, clock=clock)
+        self.assertEqual(client.get("/user"), {})
+        self.assertEqual(list(guard.admissions), [10, 70])
         self.assertTrue(client.status()["components"] == [])
-        self.assertEqual(len(opener.calls), 2)
+        self.assertEqual(len(opener.calls), 3)
+        self.assertEqual(len(guard.admissions), 2)
 
     def test_concurrent_clients_cannot_overreserve(self):
         guard = Backoff()
@@ -84,8 +88,9 @@ class BudgetTests(unittest.TestCase):
         def reserve():
             try:
                 with guard.lock:
-                    guard.reserve(10, Config(github_requests_minute=3))
-                admitted.append(True)
+                    delay = guard.reserve(10, Config(github_requests_minute=3))
+                if not delay:
+                    admitted.append(True)
             except ProbeError:
                 pass
         threads = [threading.Thread(target=reserve) for _ in range(20)]
@@ -93,7 +98,125 @@ class BudgetTests(unittest.TestCase):
             thread.start()
         for thread in threads:
             thread.join()
-        self.assertEqual(len(admitted), 3)
+        self.assertEqual(len(admitted), 1)
+        self.assertEqual(len(guard.admissions), 1)
+
+    def test_sustained_requests_stay_inside_rolling_minute_and_hour_limits(self):
+        guard = Backoff()
+        clock = FakeClock(now=0)
+        starts = []
+
+        class TimedOpener(Opener):
+            def open(self, request, timeout):
+                starts.append(clock())
+                return super().open(request, timeout)
+
+        opener = TimedOpener(*[Response({}) for _ in range(601)])
+        for _ in range(601):
+            Client("test", Config(), clock, opener=opener, backoff=guard, clock=clock).get("/user")
+        self.assertEqual(len(starts), 601)
+        self.assertTrue(all(b - a >= 6 for a, b in zip(starts, starts[1:])))
+        for at in starts:
+            self.assertLessEqual(sum(at - 60 < start <= at for start in starts), 30)
+            self.assertLessEqual(sum(at - 3600 < start <= at for start in starts), 600)
+        self.assertEqual(clock(), 3600)
+        self.assertIsNone(guard.reason)
+
+    def test_concurrent_clients_wait_for_distinct_slots_before_network_requests(self):
+        guard = Backoff()
+        stop = threading.Event()
+        config = Config(github_requests_hour=1800, github_requests_minute=60)
+        opener = Opener(Response({}), Response({}), Response({}))
+        errors = []
+
+        def read():
+            try:
+                Client("test", config, stop, opener=opener, backoff=guard).get("/user")
+            except ProbeError as error:
+                errors.append(error.kind)
+
+        threads = [threading.Thread(target=read) for _ in range(3)]
+        for thread in threads:
+            thread.start()
+        try:
+            for thread in threads:
+                thread.join(6)
+            self.assertTrue(all(not thread.is_alive() for thread in threads))
+            self.assertEqual(errors, [])
+            self.assertEqual(len(opener.calls), 3)
+            admissions = list(guard.admissions)
+            self.assertTrue(all(b - a >= 2 for a, b in zip(admissions, admissions[1:])))
+        finally:
+            stop.set()
+            for thread in threads:
+                thread.join(1)
+
+    def test_planner_deadline_defers_without_spending_or_blocking_the_next_client(self):
+        guard = Backoff()
+        clock = FakeClock()
+        opener = Opener(Response({}), Response({}))
+        client = Client("test", Config(), clock, opener=opener, backoff=guard, clock=clock)
+        client.get("/user")
+        with self.assertRaises(ProbeError) as error:
+            client.get_once("/user", 15)
+        self.assertEqual(error.exception.kind, "request_pacing")
+        self.assertEqual(client.requests, 1)
+        self.assertEqual(clock(), 10)
+        second = Client("test", Config(), clock, opener=opener, backoff=guard, clock=clock)
+        second.get("/user")
+        self.assertEqual(clock(), 16)
+        self.assertEqual(list(guard.admissions), [10, 16])
+
+    def test_pacing_wait_rechecks_provider_cooldown_before_sending(self):
+        guard = Backoff()
+        opener = Opener(Response({}))
+
+        class ProviderPause(FakeClock):
+            def wait(self, seconds):
+                guard.until = self.now + 60
+                guard.reason = "provider_rate_or_permission_backoff"
+                return super().wait(seconds)
+
+        clock = ProviderPause()
+        client = Client("test", Config(), clock, opener=opener, backoff=guard, clock=clock)
+        client.get("/user")
+        with self.assertRaises(ProbeError) as error:
+            client.get("/user")
+        self.assertEqual(error.exception.kind, "rate_limit")
+        self.assertEqual(len(opener.calls), 1)
+
+    def test_stop_interrupts_pacing_and_status_is_not_blocked_by_waiting_probe(self):
+        entered = threading.Event()
+
+        class WaitingStop(threading.Event):
+            def wait(self, seconds=None):
+                entered.set()
+                return super().wait(seconds)
+
+        stop = WaitingStop()
+        opener = Opener(Response({}), Response({"components": [], "incidents": []}))
+        client = Client("test", Config(), stop, opener=opener)
+        client.get("/user")
+        errors = []
+
+        def probe():
+            try:
+                client.get("/user")
+            except ProbeError as error:
+                errors.append(error.kind)
+
+        thread = threading.Thread(target=probe)
+        thread.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            self.assertEqual(client.status()["incidents"], [])
+        finally:
+            stop.set()
+            thread.join(1)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, ["cancelled"])
+        self.assertEqual(len(opener.calls), 2)
+        self.assertEqual(len(client.backoff.admissions), 1)
 
     def test_http_date_retry_after_is_honored_without_github_retry(self):
         guard = Backoff()
@@ -178,13 +301,21 @@ class ObservationTests(unittest.TestCase):
         self.assertTrue(all(not row["baseline_eligible"] for row in self.store.records("scope", self.now)))
 
     def test_budget_failure_stops_batch_and_records_explicit_gap(self):
-        client = DemoClient(Config(), threading.Event())
-        client.get = lambda path: (_ for _ in ()).throw(ProbeError("rate_limit", "secret"))
-        result = self.collect(client=client)
-        self.assertEqual(result["fresh_observed"], 0)
-        self.assertEqual(result["rows"][0]["gap"], "rate_limit")
-        self.assertEqual(result["rows"][0]["signal"], "observation_unavailable")
-        self.assertNotIn("secret", str(self.store.records("scope", self.now)))
+        self.names = ("example/queue-symptom", "example/self-hosted")
+        self.repos = [{"name": name} for name in self.names]
+        for kind in ("rate_limit", "request_pacing"):
+            with self.subTest(kind=kind):
+                self.store = ObservationStore()
+                self.tracker = Observations(self.store)
+                client = DemoClient(Config(), threading.Event())
+                client.get = lambda path: (_ for _ in ()).throw(ProbeError(kind, "secret"))
+                result = self.collect(client=client)
+                self.assertEqual(result["fresh_observed"], 0)
+                self.assertEqual(result["rows"][0]["gap"], kind)
+                self.assertEqual(result["rows"][0]["signal"], "observation_unavailable")
+                records = self.store.records("scope", self.now)
+                self.assertEqual(len(records), 1)
+                self.assertNotIn("secret", str(records))
 
     def test_sso_partial_results_are_a_gap_and_cannot_train_baseline(self):
         client = DemoClient(Config(), threading.Event())
@@ -296,17 +427,19 @@ class ObservationTests(unittest.TestCase):
             def get(self, path):
                 if "/repos/example/a" in path:
                     return super().get(path.replace("example/a", "example/queue-symptom"))
-                raise ProbeError("rate_limit", "Deferred")
+                raise ProbeError(kind, "Deferred")
 
-        client = Limited(Config(), threading.Event())
-        report = assess(client, inventory_report={
-            "repositories": [{"name": f"example/{name}", "url": f"https://github.com/example/{name}",
-                              "has_issues": True, "has_pages": True} for name in ("a", "b", "c")],
-            "complete": True,
-        })
-        self.assertEqual(report["next_offset"], 1)
-        self.assertEqual(report["coverage"]["rate_or_budget_deferred_repositories"], 2)
-        self.assertFalse(report["coverage"]["complete"])
+        for kind in ("rate_limit", "request_pacing"):
+            with self.subTest(kind=kind):
+                client = Limited(Config(), threading.Event())
+                report = assess(client, inventory_report={
+                    "repositories": [{"name": f"example/{name}", "url": f"https://github.com/example/{name}",
+                                      "has_issues": True, "has_pages": True} for name in ("a", "b", "c")],
+                    "complete": True,
+                })
+                self.assertEqual(report["next_offset"], 1)
+                self.assertEqual(report["coverage"]["rate_or_budget_deferred_repositories"], 2)
+                self.assertFalse(report["coverage"]["complete"])
 
     def test_history_restored_only_for_same_credential_and_selected_set(self):
         with tempfile.TemporaryDirectory() as directory:

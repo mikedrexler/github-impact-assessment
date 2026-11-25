@@ -108,8 +108,10 @@ class Backoff:
         self.reset = 0.0
         self.headroom = 50
         self.reason = None
+        self.pacing_until = 0.0
+        self.interval = 0.0
 
-    def reserve(self, now: float, config: Config):
+    def reserve(self, now: float, config: Config) -> float:
         """Caller holds lock; every attempt, including retries, consumes a slot."""
         while self.admissions and self.admissions[0] <= now - 3600:
             self.admissions.popleft()
@@ -119,17 +121,20 @@ class Backoff:
             self.until = now + self.reset - time.time() + 2
             self.reason = "provider_quota_reserve"
             raise ProbeError("rate_limit", "GitHub quota reserve reached; checks deferred")
+        self.interval = max(60 / config.github_requests_minute, 3600 / config.github_requests_hour)
         minute = [at for at in self.admissions if at > now - 60]
-        if len(self.admissions) >= config.github_requests_hour or len(minute) >= config.github_requests_minute:
-            self.until = max(
-                self.admissions[0] + 3600 if len(self.admissions) >= config.github_requests_hour else now,
-                minute[0] + 60 if len(minute) >= config.github_requests_minute else now,
-            )
-            self.reason = "local_request_budget"
-            raise ProbeError("rate_limit", "Local GitHub request budget reached; checks deferred")
+        self.pacing_until = max(
+            self.admissions[-1] + self.interval if self.admissions else now,
+            self.admissions[0] + 3600 if len(self.admissions) >= config.github_requests_hour else now,
+            minute[0] + 60 if len(minute) >= config.github_requests_minute else now,
+        )
+        if self.pacing_until > now:
+            return self.pacing_until - now
         self.admissions.append(now)
+        self.pacing_until = now + self.interval
         if self.remaining is not None:
             self.remaining = max(0, self.remaining - 1)
+        return 0.0
 
     def observe(self, headers: dict, now: float):
         headers = {key.lower(): value for key, value in headers.items()}
@@ -164,6 +169,8 @@ class Backoff:
                 "reason": self.reason if self.until > now else None,
                 "provider_remaining_estimate": self.remaining,
                 "attempts_last_hour": sum(at > now - 3600 for at in self.admissions),
+                "pacing_seconds": max(0, math.ceil(self.pacing_until - now)),
+                "pacing_interval_seconds": self.interval,
             }
 
 
@@ -184,20 +191,31 @@ class Client:
         self.backoff = backoff or Backoff()
         self._opener = opener or urllib.request.build_opener(NoRedirect())
 
-    def _reserve(self, github: bool):
-        with self._lock:
-            if self.stop.is_set():
+    def _reserve(self, github: bool, deadline: float | None = None):
+        cutoff = min(self.deadline, deadline if deadline is not None else self.deadline)
+        while True:
+            with self._lock:
+                if self.stop.is_set():
+                    raise ProbeError("cancelled", "Monitoring stopped")
+                now = self.clock()
+                if now >= cutoff:
+                    raise ProbeError("deadline", "Read time budget exhausted")
+                if self.requests >= self.config.max_requests:
+                    raise ProbeError("request_limit", "Assessment request budget exhausted")
+                if github and not self._token:
+                    raise ProbeError("authentication", "No configured GitHub credential")
+                delay = 0.0
+                if github:
+                    with self.backoff.lock:
+                        delay = self.backoff.reserve(now, self.config)
+                if not delay:
+                    self.requests += 1
+                    return
+                if now + delay >= cutoff:
+                    raise ProbeError("request_pacing", "GitHub read deferred to a later cycle by local request pacing")
+            # Never hold either request lock while waiting; Status stays independent.
+            if self.stop.wait(delay):
                 raise ProbeError("cancelled", "Monitoring stopped")
-            if self.clock() >= self.deadline:
-                raise ProbeError("deadline", "Assessment time budget exhausted")
-            if self.requests >= self.config.max_requests:
-                raise ProbeError("request_limit", "Assessment request budget exhausted")
-            if github and not self._token:
-                raise ProbeError("authentication", "No configured GitHub credential")
-            if github:
-                with self.backoff.lock:
-                    self.backoff.reserve(self.clock(), self.config)
-            self.requests += 1
 
     def _json(
         self, url: str, *, github: bool, deadline: float | None = None, attempts: int = 3,
@@ -205,7 +223,7 @@ class Client:
         for attempt in range(attempts):
             if deadline is not None and self.clock() >= deadline:
                 raise ProbeError("deadline", "Read-only planning budget exhausted")
-            self._reserve(github)
+            self._reserve(github, deadline)
             headers = {"Accept": "application/json", "User-Agent": "github-impact-assessment/0.1"}
             if github:
                 headers["Authorization"] = f"Bearer {self._token}"
@@ -389,7 +407,7 @@ def selected_inventory(
                 })
             state.next_page += 1
         except ProbeError as error:
-            if error.kind in {"inventory_deadline", "inventory_request_limit", "deadline", "request_limit", "rate_limit", "cancelled"}:
+            if error.kind in {"inventory_deadline", "inventory_request_limit", "deadline", "request_limit", "request_pacing", "rate_limit", "cancelled"}:
                 reason = {"kind": error.kind, "message": error.message}
                 break
             state.selection_errors.append({

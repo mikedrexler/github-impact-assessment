@@ -235,8 +235,9 @@ def probe(client: ReadClient, repo: dict, component: dict, incident: dict, now: 
     except ProbeError as error:
         row["error_kind"] = error.kind
         row["reason"] = error.message + "; impact is unknown"
+        description = "deferred" if error.kind == "request_pacing" else "error"
         row["evidence"].append({
-            "summary": f"Read-only probe error: {error.kind}. Permissions, local connectivity and endpoint errors are not proof of impact.",
+            "summary": f"Read-only probe {description}: {error.kind}. Permissions, local connectivity and endpoint errors are not proof of impact.",
             "url": repo["url"],
         })
     row["checked_at"] = timestamp()
@@ -339,7 +340,7 @@ def assess(
     counts = {key: sum(row["classification"] == key for row in rows)
               for key in ("confirmed", "suspected", "unknown", "not-applicable")}
     issue_rows = sum(row["error_kind"] is not None for row in rows)
-    resource_errors = {"rate_limit", "request_limit", "deadline", "cancelled"}
+    resource_errors = {"rate_limit", "request_limit", "request_pacing", "deadline", "cancelled"}
     deferred = {row["repository"] for row in rows if row["error_kind"] in resource_errors}
     stride = selected_count
     if deferred:

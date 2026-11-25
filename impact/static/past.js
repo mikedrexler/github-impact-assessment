@@ -41,7 +41,7 @@ function renderPast() {
         summary.append(severityBadge(severity));
         detail.append(summary);
         paragraph(detail, row.reason);
-        if (row.error_kind) paragraph(detail, `Probe error: ${row.error_kind}`, "error");
+        if (row.error_kind) paragraph(detail, `Probe ${row.error_kind === "request_pacing" ? "deferred" : "error"}: ${row.error_kind}`, row.error_kind === "request_pacing" ? "warning" : "error");
         for (const evidence of row.evidence) {
           const p = node("p");
           p.append(link(evidence.summary, evidence.url));

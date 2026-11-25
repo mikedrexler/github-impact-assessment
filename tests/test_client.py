@@ -44,6 +44,20 @@ class NoWait:
         return False
 
 
+class FakeClock(NoWait):
+    def __init__(self, now=10):
+        self.now = now
+        self.waits = []
+
+    def __call__(self):
+        return self.now
+
+    def wait(self, seconds):
+        self.waits.append(seconds)
+        self.now += seconds
+        return False
+
+
 def http_error(code, headers=None):
     return urllib.error.HTTPError(
         API_ROOT + "/private", code, "SECRET error text",
@@ -53,7 +67,8 @@ def http_error(code, headers=None):
 
 class ClientTests(unittest.TestCase):
     def client(self, opener, **kwargs):
-        return Client("test-secret", Config(**kwargs), NoWait(), opener=opener)
+        clock = FakeClock()
+        return Client("test-secret", Config(**kwargs), clock, opener=opener, clock=clock)
 
     def test_only_github_receives_token_and_requests_are_get(self):
         opener = Opener(Response({"components": [], "incidents": []}), Response([]))

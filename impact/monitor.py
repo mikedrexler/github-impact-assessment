@@ -97,7 +97,7 @@ class Monitor:
             if reason == "rate_limit":
                 with self._backoff.lock:
                     delay = max(self.config.poll_seconds, self._backoff.until - time.monotonic())
-            elif not report["finished"] and reason and reason not in {"checkpoint", "deadline", "request_limit", "organization_limit"}:
+            elif not report["finished"] and reason and reason not in {"checkpoint", "deadline", "request_limit", "request_pacing", "organization_limit"}:
                 delay = self.config.poll_seconds
             report["updated_at"] = timestamp()
             with self._lock:
@@ -161,7 +161,7 @@ class Monitor:
                 request_limit=min(self.config.max_requests, self.config.discovery_requests),
             )
             reason = (report["reason"] or {}).get("kind")
-            if reason in {"inventory_deadline", "inventory_request_limit", "deadline", "request_limit"}:
+            if reason in {"inventory_deadline", "inventory_request_limit", "deadline", "request_limit", "request_pacing"}:
                 delay = self.config.discovery_resume_seconds
             elif reason == "rate_limit":
                 with self._backoff.lock:
@@ -318,7 +318,9 @@ class Monitor:
                 request_limit=min(self.config.max_requests, self.config.discovery_requests),
             )
             reason = (report["reason"] or {}).get("kind")
-            if reason in {"inventory_deadline", "inventory_request_limit", "deadline", "request_limit"}:
+            if reason == "request_pacing":
+                delay = self.config.discovery_resume_seconds
+            elif reason in {"inventory_deadline", "inventory_request_limit", "deadline", "request_limit"}:
                 delay = self.config.discovery_resume_seconds
                 time_budget = reason in {"inventory_deadline", "deadline"}
                 report["reason"] = {
